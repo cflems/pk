@@ -1,0 +1,8 @@
+pkd.py
+pkcli.py
+pkdkey.json
+*.pid
+*.sock
+*.log
+*.pyc
+__pycache__/
