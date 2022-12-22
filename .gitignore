@@ -1,5 +1,6 @@
 pkd.py
 pkcli.py
+pkdnull.py
 pkdkey.json
 *.pid
 *.sock
