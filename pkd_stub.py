@@ -376,7 +376,9 @@ def serve_screens():
     try:
         sockets['screen'] = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock = sockets['screen']
+        oldmask = os.umask(0o002)
         sock.bind(socket_file)
+        os.umask(oldmask)
         sock.listen(5)
     except:
         print('[FATAL] Unable to bind socket file.')

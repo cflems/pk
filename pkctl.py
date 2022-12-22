@@ -65,7 +65,6 @@ def attach_reader(sock, state):
         if len(data) > 0:
             pnnl(str(data, 'utf-8'))
     sock.close()
-    threading.main_thread().join()
 
 def attach_cmd():
     if not isd_running():
@@ -107,7 +106,9 @@ def attach_cmd():
             state['attached'] = False
             break
 
+    state['attached'] = False
     sock.close()
+    reader_thread.join()
     return True
 
 def exec_cmd(*args):
@@ -156,7 +157,7 @@ def main():
         if attach_cmd():
             print('Detached from daemon; quitting.')
         else:
-            print('Cannot contact daemon; ensure it is running.')
+            print('Cannot contact daemon; ensure it is running and you have access to it.')
     else:
         print('Unrecognized command:', sys.argv[1])
         print_help()
