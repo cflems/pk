@@ -14,8 +14,6 @@ def isd_running():
     return os.path.isfile(PID_FILE)
 
 def startd():
-    os.setuid(DAEMON_UID)
-    os.setgid(DAEMON_GID)
     return os.system('%s %s %s %s %d %d %s' % (DAEMON_FILE, SOCKET_FILE,\
                                                PID_FILE, LOG_FILE, \
                                                DAEMON_BITS, DAEMON_PORT,\
