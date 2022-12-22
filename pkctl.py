@@ -5,7 +5,7 @@ import os, sys, signal, socket, threading, time
 SOCKET_FILE = "/run/pk/pk.sock"
 PID_FILE = "/run/pk/pk.pid"
 DAEMON_FILE = "/usr/bin/pkd"
-LOGFILE = "/var/log/pk.log"
+LOG_FILE = "/var/log/pk.log"
 KEY_FILE = "/etc/pk/server_key.json"
 DAEMON_PORT = 2236
 DAEMON_BITS = 4096

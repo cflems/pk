@@ -1,5 +1,5 @@
 [Unit]
-Description=Penguin's Kiss TCP server and screen daemon
+Description=Penguin's Kiss Command & Control Software
 After=network.target
 
 [Service]
