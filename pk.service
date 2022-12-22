@@ -1,0 +1,14 @@
+[Unit]
+Description=Penguin's Kiss TCP server and screen daemon
+After=network.target
+
+[Service]
+Type=forking
+Restart=on-failure
+User=pkd
+ExecStart=/usr/bin/pkctl start
+ExecStop=/usr/bin/pkctl stop
+PIDFile=/run/pk/pk.pid
+
+[Install]
+WantedBy=multi-user.target

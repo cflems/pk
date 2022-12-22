@@ -1,31 +1,25 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 import os, sys, signal, socket, threading, time
 
 # basic config
-#SOCKET_FILE = "/run/pk/pk.sock"
-#PID_FILE = "/run/pk/pk.pid"
-#DAEMON_FILE = "/usr/bin/pkd"
-#LOGFILE = "/var/log/pk.log"
-SOCKET_FILE = "./pk.sock"
-PID_FILE = "./pk.pid"
-DAEMON_FILE = "./pkd.py"
-LOG_FILE = "./pk.log"
-KEY_FILE = "./pkdkey.json"
+SOCKET_FILE = "/run/pk/pk.sock"
+PID_FILE = "/run/pk/pk.pid"
+DAEMON_FILE = "/usr/bin/pkd"
+LOGFILE = "/var/log/pk.log"
+KEY_FILE = "/etc/pk/server_key.json"
 DAEMON_PORT = 2236
 DAEMON_BITS = 4096
-#TODO:
-#KEY_FILE=....json
-#SWITCH_USER=pkd
-#pass port, bits, key file to server
 
 def isd_running():
     return os.path.isfile(PID_FILE)
 
 def startd():
-    return os.system('python %s %s %s %s %d %d %s' % (DAEMON_FILE, SOCKET_FILE,\
-                                                      PID_FILE, LOG_FILE, \
-                                                      DAEMON_BITS, DAEMON_PORT,\
-                                                      KEY_FILE))
+    os.setuid(DAEMON_UID)
+    os.setgid(DAEMON_GID)
+    return os.system('%s %s %s %s %d %d %s' % (DAEMON_FILE, SOCKET_FILE,\
+                                               PID_FILE, LOG_FILE, \
+                                               DAEMON_BITS, DAEMON_PORT,\
+                                               KEY_FILE))
 
 def signald(sig):
     if not isd_running():
