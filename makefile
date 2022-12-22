@@ -3,7 +3,7 @@ all:
 clean:
 	rm -f pkd.py *.pid *.sock *.log
 install:
-	useradd -rUs /usr/sbin/nologin pkd
+	useradd -rUs /usr/sbin/nologin pkd || true
 	mkdir -p /run/pk /etc/pk
 	chmod 0755 /run/pk
 	chmod 0700 /etc/pk
