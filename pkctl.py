@@ -83,25 +83,25 @@ def attach_cmd():
     reader_thread.start()
     while state['attached']:
         try:
-            line = input().strip()
+            line = bytes(input().strip(), 'utf-8')
         except EOFError:
             print('detach')
-            line = 'detach'
-        if line == 'detach':
+            line = b'detach'
+        if line == b'detach':
             try:
                 sock.sendall(b'\xde\xad')
             except:
                 pass
             state['attached'] = False
-        elif line == 'clear':
+        elif line == b'clear':
             os.system('clear')
-            line = '\xc0\xdeprompt'
+            line = b'\xc0\xdeprompt'
         elif len(line) < 1:
-            line = '\xc0\xdeprompt'
+            line = b'\xc0\xdeprompt'
         if not state['attached']:
             break
         try:
-            sock.sendall(bytes(line, 'utf-8'))
+            sock.sendall(line)
         except:
             state['attached'] = False
             break
@@ -110,9 +110,6 @@ def attach_cmd():
     sock.close()
     reader_thread.join()
     return True
-
-def exec_cmd(*args):
-    pass
 
 def main():
     if len(sys.argv) < 2 or sys.argv[1] == 'help':
