@@ -2,17 +2,11 @@
 import os, sys, signal, socket, selectors, time, tty
 
 # basic config
-#SOCKET_FILE = "/run/pk/pk.sock"
-#PID_FILE = "/run/pk/pk.pid"
-#DAEMON_FILE = "/usr/bin/pkd"
-#LOG_FILE = "/var/log/pk.log"
-#KEY_FILE = "/etc/pk/server_key.json"
-
-SOCKET_FILE = "./pk.sock"
-PID_FILE = "./pk.pid"
-DAEMON_FILE = "python pkd.py"
-LOG_FILE = "./pk.log"
-KEY_FILE = "./default_key.json"
+SOCKET_FILE = "/run/pk/pk.sock"
+PID_FILE = "/run/pk/pk.pid"
+DAEMON_FILE = "/usr/bin/pkd"
+LOG_FILE = "/var/log/pk.log"
+KEY_FILE = "/etc/pk/server_key.json"
 DAEMON_PORT = 2236
 DAEMON_BITS = 4096
 

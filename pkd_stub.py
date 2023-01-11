@@ -422,6 +422,8 @@ def screen_reader(screen):
                 cmdq_lock.release()
             elif cmd == b'show-serverkey':
                 resp = showcrypto()
+            elif cmd == b'\xc0\xdeprompt':
+                pass
             elif cmd == b'pty':
                 resp = '[pk] Must specify a client to connect to via PTY.'
             elif cmd[:4] == b'pty ':
@@ -444,13 +446,6 @@ def screen_reader(screen):
                         detach_screen(screen)
                         return
                     resp = '[pk] %s' % pty_out
-            elif cmd == b'\xc0\xdeprompt':
-                try:
-                    screen.sendall(prompt_str())
-                except:
-                    detach_screen(screen)
-                    return
-                continue
             elif len(cmd) > 0:
                 shcmd = True
                 targets = []
