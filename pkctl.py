@@ -1,12 +1,18 @@
 #!/usr/bin/python3
-import os, sys, signal, socket, threading, time
+import os, sys, signal, socket, selectors, time, tty
 
 # basic config
-SOCKET_FILE = "/run/pk/pk.sock"
-PID_FILE = "/run/pk/pk.pid"
-DAEMON_FILE = "/usr/bin/pkd"
-LOG_FILE = "/var/log/pk.log"
-KEY_FILE = "/etc/pk/server_key.json"
+#SOCKET_FILE = "/run/pk/pk.sock"
+#PID_FILE = "/run/pk/pk.pid"
+#DAEMON_FILE = "/usr/bin/pkd"
+#LOG_FILE = "/var/log/pk.log"
+#KEY_FILE = "/etc/pk/server_key.json"
+
+SOCKET_FILE = "./pk.sock"
+PID_FILE = "./pk.pid"
+DAEMON_FILE = "python pkd.py"
+LOG_FILE = "./pk.log"
+KEY_FILE = "./default_key.json"
 DAEMON_PORT = 2236
 DAEMON_BITS = 4096
 
@@ -53,66 +59,87 @@ def start_cmd():
 def stop_cmd():
     return signald(signal.SIGTERM)
 
-def attach_reader(sock, state):
-    while state['attached']:
-        try:
-            data = sock.recv(1024)
-        except:
-            data = b'\xde\xad'
-        if data == b'\xde\xad':
-            state['attached'] = False
-            break
-        if len(data) > 0:
-            pnnl(str(data, 'utf-8'))
-    sock.close()
-
 def attach_cmd():
     if not isd_running():
         return False
 
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    state = {}
-    reader_thread = threading.Thread(target=attach_reader, args=(sock, state))
-
     try:
         sock.connect(SOCKET_FILE)
     except:
         sock.close()
         return False
-    state['attached'] = True
-    reader_thread.start()
-    while state['attached']:
-        try:
-            line = input().strip()
-        except EOFError:
-            print('detach')
-            line = 'detach'
-        if line == 'detach':
-            try:
-                sock.sendall(b'\xde\xad')
-            except:
-                pass
-            state['attached'] = False
-        elif line == 'clear':
-            os.system('clear')
-            line = '\xc0\xdeprompt'
-        elif len(line) < 1:
-            line = '\xc0\xdeprompt'
-        if not state['attached']:
-            break
-        try:
-            sock.sendall(bytes(line, 'utf-8'))
-        except:
-            state['attached'] = False
-            break
+    sel = selectors.DefaultSelector()
+    sel.register(sys.stdin.fileno(), selectors.EVENT_READ, 0)
+    sel.register(sock, selectors.EVENT_READ, 1)
+    attached = True
+    pty_mode = False
+    stdin_mode = None
 
-    state['attached'] = False
+    while attached:
+        events = sel.select()
+        for event, mask in events:
+            if event.data == 0:
+                try:
+                    data = os.read(sys.stdin.fileno(), 1024)
+                except Exception:
+                    data = False
+                if not data:
+                    attached = False
+                    break
+                elif pty_mode:
+                    try:
+                        sock.sendall(data)
+                        continue
+                    except:
+                        attached = False
+                        break
+                elif data.strip() == b'detach':
+                    try:
+                        sock.sendall(b'\xde\xad')
+                    except:
+                        pass
+                    attached = False
+                    break
+                elif data.strip() == b'clear':
+                    os.system('clear')
+                    data = b'\xc0\xdeprompt'
+                elif len(data.strip()) < 1:
+                    data = b'\xc0\xdeprompt'
+                try:
+                    sock.sendall(data)
+                except:
+                    attached = False
+                    break
+            else:
+                try:
+                    data = sock.recv(1024)
+                except Exception:
+                    data = False
+                if not data or data == b'\xde\xad':
+                    if pty_mode:
+                        tty.tcsetattr(sys.stdin.fileno(), tty.TCSAFLUSH, stdin_mode)
+                        pty_mode = False
+                        print('turned off pty mode due to remote detach')
+                    attached = False
+                    break
+                elif pty_mode and data[:6] == b'\xc0\xdenpty':
+                    tty.tcsetattr(sys.stdin.fileno(), tty.TCSAFLUSH, stdin_mode)
+                    pty_mode = False
+                    print('turned off pty mode due to npty command')
+                    if len(data) > 6:
+                        pnnl(str(data[6:], 'utf-8'))
+                elif not pty_mode and data == b'\xc0\xdepty':
+                    pty_mode = True
+                    stdin_mode = tty.tcgetattr(sys.stdin.fileno())
+                    tty.setraw(sys.stdin.fileno())
+                else:
+                    pnnl(str(data, 'utf-8'))
+    sel.close()
     sock.close()
-    reader_thread.join()
+    if pty_mode:
+        tty.tcsetattr(sys.stdin.fileno(), tty.TCSAFLUSH, stdin_mode)
     return True
-
-def exec_cmd(*args):
-    pass
 
 def main():
     if len(sys.argv) < 2 or sys.argv[1] == 'help':
