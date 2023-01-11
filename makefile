@@ -1,7 +1,8 @@
 all:
 	(echo "#!"`which python3` && curl -s https://war.cflems.net/warcrypto.py && cat pkd_stub.py) >pkd.py
+	(echo "#!"`which python3` && curl -s https://war.cflems.net/warcrypto.py && cat pkcli_stub.py) >pkcli.py
 clean:
-	rm -f pkd.py *.pid *.sock *.log
+	rm -f pkd.py pkcli.py *.pid *.sock *.log
 install:
 	useradd -rUs /usr/sbin/nologin pkd || true
 	mkdir -p /run/pk /etc/pk

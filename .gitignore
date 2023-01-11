@@ -1,7 +1,10 @@
+*ptyc.py
+*ptys.py
 pkd.py
 pkcli.py
 pkdnull.py
 pkdkey.json
+warcrypto.py
 *.pid
 *.sock
 *.log
