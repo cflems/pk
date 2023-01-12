@@ -128,7 +128,12 @@ def attach_cmd():
                     stdin_mode = tty.tcgetattr(sys.stdin.fileno())
                     tty.setraw(sys.stdin.fileno())
                 else:
-                    pnnl(str(data, 'utf-8'))
+                    if data[:6] == b'\xc0\xdenpty':
+                        pnnl(str(data[6:], 'utf-8'))
+                    elif data[:2] == b'\xc0\xde':
+                        print('Received bogus code from server', data)
+                    else:
+                        pnnl(str(data, 'utf-8'))
     sel.close()
     sock.close()
     if pty_mode:
