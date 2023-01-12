@@ -106,8 +106,8 @@ def get_hostkey(host):
         del hkdb[host]
         return False
 
-def run_pty(sock, privkey, rpubkey, bits):
-    term = recv_encrypted(sock, privkey['d'], privkey['n'], bits=bits)
+def run_pty(sock, screen_is, screen_os):
+    term = screen_is.recv()
     sel = selectors.DefaultSelector()
     pid, shfd = pty.fork()
     if pid == 0:
@@ -130,10 +130,10 @@ def run_pty(sock, privkey, rpubkey, bits):
                         data = False
                     if not data:
                         return True
-                    send_encrypted(sock, data, rpubkey['e'], rpubkey['n'], bits=bits)
+                    screen_os.send(data)
                 else:
                     try:
-                        data = recv_encrypted(sock, privkey['d'], privkey['n'], bits=bits)
+                        data = screen_is.recv()
                     except:
                         data = False
                     if not data:
@@ -172,6 +172,7 @@ def work(h_addr, port, privkey, bits):
             os.environ['PS1'] = '$ '
         send_encrypted(sock, os.environ['PS1'], rpubkey['e'], rpubkey['n'], bits=bits)
         while True:
+            # TODO: this hangs or errors after a pty
             cmd = recv_encrypted(sock, privkey['d'], privkey['n'], bits=bits)
             if cmd == b'tunnel':
                 send_encrypted(sock, b'\xde\xad', rpubkey['e'], rpubkey['n'], bits=bits)
@@ -185,10 +186,14 @@ def work(h_addr, port, privkey, bits):
                 else:
                     response = '[pk] Error: could not refresh host database.\n'
             elif cmd == b'pty':
-                # TODO: use a one-time symmetric session key for pty communications
-                if not run_pty(sock, privkey, rpubkey, bits=bits):
+                send_encrypted(sock, b'\xc0\xdeflush', rpubkey['e'], rpubkey['n'], bits=bits)
+                screen_is = InStreamCipher(sock, privkey, bits=bits)
+                screen_os = OutStreamCipher(sock, rpubkey, bits=bits)
+                if not run_pty(sock, screen_is, screen_os):
                     return True
-                send_encrypted(sock, b'\xc0\xdenpty', rpubkey['e'], rpubkey['n'], bits=bits)
+                screen_os.send(b'\xc0\xdenpty')
+                assert(screen_is.recv() == b'\xc0\xdeflush')
+                # TODO: this comes on time but the process zombifies after for some reason
                 continue
             else:
                 try:

@@ -2,7 +2,7 @@ import os, sys, socket, threading, signal, json, traceback
 from concurrent.futures import ThreadPoolExecutor
 
 # initial crypto config
-SERVER_PROMPT = b'# '
+SERVER_PROMPT = b'pk> '
 CONNECTED_PROMPT = b'$ '
 DEFAULT_PRIVKEY = {
     'n' : 566985700738319622174686131400034453643720466970978517574628629274979976524124940713860540038882426013024114564601644133774454954579859603022526047211561634473245368041734849645333850659593387029777461624139999293346678168096585398894872902836488432305321788895930893995350254306011511954048973993218576068120842406854381660868440914954041085267631248545101914138883676131275460708745009456577214046268195248043933401098454229528930264593554947172986600022924103676180205323189749504546460222696144254434950563003806500524021358243739253925888283568187475109036444929999292467231057057868003949542201486910774286204467263359268168124928585201908563486221036238676222817747434022603388355897696091620276281574099795985472307965135468502881374317279001616973398539298555877212283138431306761372378738101671232030286096798836533645647014376468992868000495595560982785914820504104078715279785802300066599327401921364225207587243296778060887445799525002269634182195900334989318967452442166075135355126785800284396564017524632233821326493688824504309419677467169118434525079593731269479730143537689127087750148171355493757239210404790175123435648784211703985569364347710928586741341454862278795609365544396160373248258804813219121521794117,
@@ -189,7 +189,10 @@ def transport_tcp(client):
                 return
         else:
             try:
-                data = recv_encrypted(client['sock'], privkey['d'], privkey['n'], bits=bits)
+                if client['pty']:
+                    data = client['pty_is'].recv()
+                else:
+                    data = recv_encrypted(client['sock'], privkey['d'], privkey['n'], bits=bits)
             except:
                 data = False
             if not alive:
@@ -200,6 +203,8 @@ def transport_tcp(client):
                 if client['pty']:
                     unpty(client)
                 return
+            elif data == b'\xc0\xdeflush':
+                continue
             elif not client['pty']:
                 bnnl(data, logging=False)
             elif data == b'\xc0\xdenpty':
@@ -305,7 +310,13 @@ def unpty(client):
     if not alive:
         tcpc_lock.release()
         return
+    try:
+        client['pty_os'].send(b'\xc0\xdeflush')
+    except:
+        client['alive'] = False
     client['pty'] = False
+    del client['pty_is']
+    del client['pty_os']
     tcpc_lock.release()
 
 def run_pty(screen, cn):
@@ -319,6 +330,9 @@ def run_pty(screen, cn):
         tcpc_lock.release()
         return 'Client %d disconnected while attaching PTY.' % cn
     client = tcp_clients[cn]
+    pty_os = OutStreamCipher(client['sock'], client['pubkey'], bits=bits)
+    client['pty_os'] = pty_os
+    client['pty_is'] = InStreamCipher(client['sock'], privkey, bits=bits)
     client['pty'] = screen
     tcpc_lock.release()
 
@@ -326,17 +340,16 @@ def run_pty(screen, cn):
         dispatch_ccmd(client, b'pty')
         if 'TERM' not in os.environ:
             os.environ['TERM'] = 'xterm-256color'
-        dispatch_ccmd(client, os.environ['TERM'])
-    except:
+        pty_os.send(bytes(os.environ['TERM'], 'utf-8'))
+    except Exception as e:
         client['alive'] = False
-        return 'Client %d failed PTY handshake.' % cn
+        return 'Client %d failed PTY handshake (%s).' % (cn, repr(e))
 
     try:
         screen.sendall(b'\xc0\xdepty')
     except:
         unpty(client)
         return False
-
 
     while True:
         if not alive:
@@ -358,7 +371,7 @@ def run_pty(screen, cn):
             unpty(client)
             return False
         try:
-            dispatch_ccmd(client, data)
+            pty_os.send(data)
         except:
             client['alive'] = False
 
