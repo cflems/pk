@@ -359,11 +359,14 @@ def run_pty(screen, cn):
 
         try:
             data = screen.recv(1024)
+            # TODO: there is an artifact here due to use of blocking sockets:
+            # must hit 1 additional key before PTY mode will disable (because
+            # waiting for this recv.) This will be patched out when we switch
+            # to using selectors.
             if not alive:
                 return False
         except:
             data = b'\xde\xad'
-            # TODO: problem is here: we wake up and suddenly not in pty mode
         if not data or data == b'\xde\xad':
             unpty(client)
             return False
