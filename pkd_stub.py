@@ -1,4 +1,4 @@
-import os, sys, socket, threading, signal, json, traceback
+import os, sys, socket, threading, signal, json
 from concurrent.futures import ThreadPoolExecutor
 
 # initial crypto config
@@ -310,10 +310,6 @@ def unpty(client):
     if not alive:
         tcpc_lock.release()
         return
-    try:
-        client['pty_os'].send(b'\xc0\xdeflush')
-    except:
-        client['alive'] = False
     client['pty'] = False
     del client['pty_is']
     del client['pty_os']
@@ -367,13 +363,15 @@ def run_pty(screen, cn):
                 return False
         except:
             data = b'\xde\xad'
+            # TODO: problem is here: we wake up and suddenly not in pty mode
         if not data or data == b'\xde\xad':
             unpty(client)
             return False
-        try:
-            pty_os.send(data)
-        except:
-            client['alive'] = False
+        elif alive and client['alive'] and client['pty'] == screen:
+            try:
+                pty_os.send(data)
+            except:
+                client['alive'] = False
 
 def screen_reader(screen):
     global alive, screens, screens_lock, cmdq, cmdq_lock, tcp_clients, tcpc_lock
@@ -540,7 +538,7 @@ def cleanup(*args):
     if 'screen' in sockets:
         sockets['screen'].close()
         try:
-            ws = socket.socket(socket.AF_UNIX, sockte.SOCK_STREAM)
+            ws = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             ws.connect(socket_file)
             ws.close()
         except:

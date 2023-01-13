@@ -192,7 +192,6 @@ def work(h_addr, port, privkey, bits):
                 if not run_pty(sock, screen_is, screen_os):
                     return True
                 screen_os.send(b'\xc0\xdenpty')
-                assert(screen_is.recv() == b'\xc0\xdeflush')
                 # TODO: this comes on time but the process zombifies after for some reason
                 continue
             else:
