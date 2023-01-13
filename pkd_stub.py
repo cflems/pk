@@ -567,7 +567,7 @@ def cleanup(*args):
     tcpc_lock.release()
 
     global pool
-    pool.shutdown(wait=True, cancel_futures=True)
+    pool.shutdown()
 
     global pid_file
     os.remove(pid_file)
