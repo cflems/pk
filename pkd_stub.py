@@ -1,5 +1,4 @@
-import os, sys, socket, threading, signal, json
-from concurrent.futures import ThreadPoolExecutor
+import os, sys, socket, signal, json, selectors
 
 # initial crypto config
 SERVER_PROMPT = b'pk> '
@@ -40,7 +39,6 @@ def dispatch_command(sock, command, rpubkey):
 def dispatch_ccmd(client, command):
     dispatch_command(client['sock'], command, client['pubkey'])
 
-# brint takes a string
 def brint(*args, sep=' ', end='\n', prompt=True):
     s = '%s%s' % (sep.join(map(lambda s: betterstr(s), args)), end)
     bnnl(s, logging=prompt)
@@ -51,239 +49,53 @@ def bnnl(s, logging=False):
     broadcast_screens(s, sv_prompt=logging, ctd_prompt=logging)
 
 def broadcast_screens(s, skip=set(), sv_prompt=False, ctd_prompt=False):
+    global screens, tcp_clients
     if type(s) != bytes:
         s = bytes(s, 'utf-8')
 
-    global alive, screens, screens_lock, tcp_clients
-    screens_lock.acquire()
-    if not alive:
-        screens_lock.release()
-        return
     i = 0
-    while alive and i < len(screens):
-        if screens[i] in skip:
+    while i < len(screens):
+        if screens[i]['sock'] in skip or screens[i]['pty']:
             i += 1
             continue
         try:
-            screens[i].sendall(s)
+            screens[i]['sock'].sendall(s)
             if sv_prompt and len(tcp_clients) < 1:
-                screens[i].sendall(SERVER_PROMPT)
+                screens[i]['sock'].sendall(SERVER_PROMPT)
             if ctd_prompt and len(tcp_clients) > 0:
-                screens[i].sendall(CONNECTED_PROMPT)
+                screens[i]['sock'].sendall(CONNECTED_PROMPT)
             i += 1
         except:
-            screens[i].close()
-            del screens[i]
-    screens_lock.release()
+            screens_detach(screens[i])
 
 def blast_command(cmd, orig_screen, targets=set()):
-    print('[INFO] Blasting command: %s to %s' % (betterstr(cmd), betterstr(targets)))
+    global cmdq
+    tstr = betterstr(targets)
+    if tstr == 'set()':
+        tstr = 'all clients'
+    print('[INFO] Blasting command: %s to %s.' % (betterstr(cmd), betterstr(targets)))
     if type(cmd) != bytes:
         cmd = bytes(cmd, 'utf-8')
 
-    global alive
-    if not alive:
-        return
-    broadcast_screens(cmd+b'\n', skip=[orig_screen], sv_prompt=True, ctd_prompt=False)
-    if not alive:
-        return
+    broadcast_screens(cmd+b'\n', skip={orig_screen['sock']}, sv_prompt=True, ctd_prompt=False)
 
     wildcard = len(targets) < 1
-    global cmdq, cmdq_lock, tcpc_lock
-    cmdq_lock.acquire()
-    if not alive:
-        cmdq_lock.release()
-        return
-    tcpc_lock.acquire()
+    if wildcard:
+        cmdq.append(cmd)
+
     i = 0
-    while alive and i < len(tcp_clients):
+    while i < len(tcp_clients):
         try:
             if tcp_clients[i]['pty']:
+                i += 1
                 continue
             if wildcard or i in targets:
                 dispatch_ccmd(tcp_clients[i], cmd)
             if wildcard:
                 tcp_clients[i]['qidx'] += 1
-        except:
-            tcp_clients[i]['alive'] = False
-        finally:
             i += 1
-    tcpc_lock.release()
-    if wildcard:
-        cmdq.append(cmd)
-    cmdq_lock.release()
-
-def tcp_handshake(sock):
-    global privkey, bits, exp
-    nbytes, headsz = bits//8, 2
-    rnbytes = int.from_bytes(sock.recv(headsz), 'big')
-    sock.sendall(nbytes.to_bytes(headsz, 'big'))
-
-    if rnbytes != nbytes:
-        brint('[ERROR] nbytes mismatch with client: %d vs %d' % (rnbytes, nbytes))
-        return False
-
-    rpubkey = { 'n': int.from_bytes(recv_encrypted(sock, privkey['d'], privkey['n'], bits=bits),\
-                'big'), 'e': exp }
-
-    return rpubkey
-
-def tcp_disconnect(client):
-    global alive, tcp_clients, tcpc_lock
-    tcpc_lock.acquire()
-    if not alive:
-        tcpc_lock.release()
-        return
-    client['sock'].close()
-    printdc = False
-    if client in tcp_clients:
-        printdc = True
-        cliidx = tcp_clients.index(client)
-        dcmsg = '[INFO] TCP Client %d disconnected.' % cliidx
-        del tcp_clients[cliidx]
-    tcpc_lock.release()
-    if printdc:
-        brint(dcmsg)
-
-def transport_tcp(client):
-    global tcp_clients, tcpc_lock
-    try:
-        rpk = tcp_handshake(client['sock'])
-    except Exception as e:
-        brint('[ERROR] %s' % repr(e))
-        rpk = False
-    if not rpk:
-        brint('[INFO] Handshake failed; disconnecting client:', client['addr'])
-        client['alive'] = False
-        tcp_disconnect(client)
-        return
-    client['pubkey'] = rpk
-
-    global alive, cmdq, cmdq_lock, privkey, bits
-    while alive:
-        if not client['alive']:
-            tcp_disconnect(client)
-            return
-        
-        if not client['pty'] and len(cmdq) > client['qidx']:
-            cmdq_lock.acquire()
-            if not alive:
-                cmdq_lock.release()
-                return
-            if not client['alive']:
-                cmdq_lock.release()
-                tcp_disconnect(client)
-                return
-            if client['pty'] or len(cmdq) <= client['qidx']:
-                cmdq_lock.release()
-                continue
-
-            cmd = cmdq[client['qidx']]
-            client['qidx'] += 1
-            cmdq_lock.release()
-            try:
-                dispatch_ccmd(client, cmd)
-            except:
-                client['alive'] = False
-                tcp_disconnect(client)
-                return
-        else:
-            try:
-                if client['pty']:
-                    data = client['pty_is'].recv()
-                else:
-                    data = recv_encrypted(client['sock'], privkey['d'], privkey['n'], bits=bits)
-            except:
-                data = False
-            if not alive:
-                return
-            elif not data or data == b'\xde\xad':
-                client['alive'] = False
-                tcp_disconnect(client)
-                if client['pty']:
-                    unpty(client)
-                return
-            elif data == b'\xc0\xdeflush':
-                continue
-            elif not client['pty']:
-                bnnl(data, logging=False)
-            elif data == b'\xc0\xdenpty':
-                unpty(client)
-            else:
-                try:
-                    client['pty'].sendall(data)
-                except:
-                    unpty(client)
-                    print('Screen failed to receive PTY data:', data)
-
-def serve_tcp():
-    global sockets, tcp_port
-    if tcp_port < 1:
-        brint('[INFO] TCP listener disabled.')
-        return
-
-    sockets['tcp'] = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock = sockets['tcp']
-    try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('0.0.0.0', tcp_port))
-        sock.listen(5)
-    except:
-        brint('[WARNING] Error binding TCP socket, TCP listener will now die.')
-        sock.close()
-        del sockets['tcp']
-        return
-    brint('[INFO] TCP listener started on port %d' % tcp_port)
-
-    global alive, pool, tcp_clients, tcpc_lock
-    while alive:
-        try:
-            cs, ca = sock.accept()
         except:
-            brint('[WARNING] Error accepting TCP client, moving on.')
-            continue
-
-        if not alive:
-            cs.close()
-            return
-        brint('[INFO] Connection from', ca[0], 'over TCP.', prompt=False)
-
-        tcpcli = {
-            'addr': ca,
-            'sock': cs,
-            'qidx': 0,
-            'pty': False,
-            'alive': True
-        }
-        tcpc_lock.acquire()
-        if not alive:
-            tcpc_lock.release()
-            return
-        tcp_clients.append(tcpcli)
-        tcpc_lock.release()
-        try:
-            pool.submit(transport_tcp, tcpcli)
-        except RuntimeError:
-            return
-
-def detach_screen(screen):
-    global screens, screens_lock
-    screens_lock.acquire()
-    if not alive:
-        screens_lock.release()
-        return
-
-    sidx = -1
-    if screen in screens:
-        sidx = screens.index(screen)
-        del screens[sidx]
-    screens_lock.release()
-    try:
-        screen.sendall(b'\xde\xad')
-    except:
-        pass
-    screen.close()
-    brint('[INFO] Screen detaching: %d' % sidx)
+            tcp_disconnect(tcp_clients[i])
 
 def cliinfo(clients):
     try:
@@ -304,278 +116,309 @@ def cliinfo(clients):
     except Exception as e:
         return repr(e)
 
-def unpty(client):
-    global alive, tcp_clients, tcpc_lock
-    tcpc_lock.acquire()
-    if not alive:
-        tcpc_lock.release()
-        return
-    client['pty'] = False
-    del client['pty_is']
-    del client['pty_os']
-    tcpc_lock.release()
+def screens_detach(sel, screen):
+    global screens
+    sel.unregister(screen['sock'])
+    screen['sock'].close()
+    screen['alive'] = False
 
-def run_pty(screen, cn):
-    global alive, tcp_clients, tcpc_lock, privkey, bits
-    tcpc_lock.acquire()
-    if not alive:
-        tcpc_lock.release()
-        return
+    if screen in screens:
+        idx = screens.index(screen)
+        del screens[idx]
+        brint('[INFO] Screen detaching: %d' % idx)
 
-    if cn >= len(tcp_clients):
-        tcpc_lock.release()
-        return 'Client %d disconnected while attaching PTY.' % cn
-    client = tcp_clients[cn]
-    pty_os = OutStreamCipher(client['sock'], client['pubkey'], bits=bits)
-    client['pty_os'] = pty_os
-    client['pty_is'] = InStreamCipher(client['sock'], privkey, bits=bits)
+def screens_pty(sel, screen, client):
+    screen['pty'] = client
     client['pty'] = screen
-    tcpc_lock.release()
+    client['osc'] = OutStreamCipher(client['sock'], client['pubkey'], bits=bits)
+    client['isc'] = InStreamCipher(client['sock'], privkey, bits=bits)
 
     try:
         dispatch_ccmd(client, b'pty')
         if 'TERM' not in os.environ:
             os.environ['TERM'] = 'xterm-256color'
-        pty_os.send(bytes(os.environ['TERM'], 'utf-8'))
-    except Exception as e:
-        client['alive'] = False
-        return 'Client %d failed PTY handshake (%s).' % (cn, repr(e))
-
-    try:
-        screen.sendall(b'\xc0\xdepty')
+        client['osc'].send(bytes(os.environ['TERM'], 'utf-8'))
     except:
-        unpty(client)
-        return False
-
-    while True:
-        if not alive:
-            return
-        elif not client['alive']:
-            return 'PTY session terminated due to client disconnect.'
-        elif not client['pty']:
-            return 'PTY session ended normally.'
-        elif client['pty'] != screen:
-            return 'PTY session seized by another screen.'
-
-        try:
-            data = screen.recv(1024)
-            # TODO: there is an artifact here due to use of blocking sockets:
-            # must hit 1 additional key before PTY mode will disable (because
-            # waiting for this recv.) This will be patched out when we switch
-            # to using selectors.
-            if not alive:
-                return False
-        except:
-            data = b'\xde\xad'
-        if not data or data == b'\xde\xad':
-            unpty(client)
-            return False
-        elif alive and client['alive'] and client['pty'] == screen:
-            try:
-                pty_os.send(data)
-            except:
-                client['alive'] = False
-
-def screen_reader(screen):
-    global alive, screens, screens_lock, cmdq, cmdq_lock, tcp_clients, tcpc_lock
-
+        tcp_unpty(sel, client)
+        tcp_disconnect(sel, client)
+    
     try:
-        screen.sendall(motd()+b'\n')
-        screen.sendall(prompt_str())
-    except Exception as e:
-        print('[ERROR] Sending motd produced:', repr(e))
-        detach_screen(screen)
+        screen['sock'].sendall(b'\xc0\xdepty')
+    except:
+        screens_detach(sel, screen)
+        tcp_unpty(sel, client)
         return
 
-    while alive:
-        try:
-            data = screen.recv(1024).strip().split(b'\n')
-        except:
-            data = [b'\xde\xad']
-        if not alive:
-            return
-        resp, shcmd = '', False
-        for cmd in data:
-            if not alive:
-                break
-            elif cmd == b'\xde\xad':
-                detach_screen(screen)
-                return
-            elif cmd == b'nscreen':
-                resp = 'Active screens: %d' % len(screens)
-            elif cmd == b'ncli':
-                resp = 'Active TCP clients: %d' % len(tcp_clients)
-            elif cmd == b'lcli':
-                tcpc_lock.acquire()
-                if not alive:
-                    tcpc_lock.release()
-                    return
-                resp = 'Active TCP clients:\n%s' % cliinfo(tcp_clients)
-                tcpc_lock.release()
-            elif cmd == b'lq':
-                cmdq_lock.acquire()
-                if not alive:
-                    cmdq_lock.release()
-                    return
-                resp = '[%s]' % ', '.join(map(lambda s : repr(betterstr(s)), cmdq))
-                cmdq_lock.release()
-            elif cmd == b'cq':
-                cmdq_lock.acquire()
-                if not alive:
-                    cmdq_lock.release()
-                    return
-                cmdq.clear()
-                tcpc_lock.acquire()
-                if not alive:
-                    cmdq_lock.release()
-                    tcpc_lock.release()
-                    return
-                for client in tcp_clients:
-                    client['qidx'] = 0
-                tcpc_lock.release()
-                cmdq_lock.release()
-            elif cmd == b'show-serverkey':
-                resp = showcrypto()
-            elif cmd == b'\xc0\xdeprompt':
-                pass
-            elif cmd == b'pty':
-                resp = '[pk] Must specify a client to connect to via PTY.'
-            elif cmd[:4] == b'pty ':
-                try:
-                    cn = int(cmd[4:])
-                except:
-                    cn = -1
-                if cn < 0 or cn >= len(tcp_clients):
-                    resp = '[pk] Cannot attach PTY to invalid TCP client.'
-                else:
-                    pty_out = run_pty(screen, cn)
-                    if not alive:
-                        return
-                    if not pty_out:
-                        detach_screen(screen)
-                        return
-                    try:
-                        screen.sendall(b'\xc0\xdenpty')
-                    except:
-                        detach_screen(screen)
-                        return
-                    resp = '[pk] %s' % pty_out
-            elif len(cmd) > 0:
-                shcmd = True
-                targets = []
-                if cmd[:7] == b'TARGET=':
-                    if b' ' in cmd:
-                        sep = cmd.index(b' ')
-                        for tval in cmd[7:sep].split(b','):
-                            try:
-                                targets.append(int(tval))
-                            except:
-                                resp += '[pk] Invalid target: %s. Must be an integer.\n' % tval
-                        cmd = cmd[sep+1:]
-                        resp = resp.strip()
-                    else:
-                        resp = '[pk] Can\'t target null command.'
-                blast_command(cmd, screen, targets=targets)
-            if not alive:
-                return
-            try:
-                if len(resp) > 0:
-                    screen.sendall(bytes('%s\n' % resp, 'utf-8'))
-                if len(tcp_clients) < 1:
-                    screen.sendall(SERVER_PROMPT)
-                elif not shcmd:
-                    screen.sendall(CONNECTED_PROMPT)
-            except Exception as e:
-                print('[ERROR] Sending command result produced:', repr(e))
-                detach_screen(screen)
-                return
-
-def serve_screens():
-    global sockets
+def screens_read(sel, sock, screen):
+    global cmdq, tcp_clients, screens, privkey, bits
+    if not screen['alive']:
+        return
     try:
-        sockets['screen'] = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock = sockets['screen']
+        data = sock.recv(1024)
+    except:
+        data = False
+    if not data or data == b'\xde\xad':
+        screens_detach(sel, screen)
+        if screen['pty']:
+            tcp_unpty(sel, screen['pty'], npty_screen=False)
+        return
+
+    if screen['pty']:
+        try:
+            screen['pty']['osc'].send(data)
+        except:
+            tcp_unpty(sel, client, catchup=False)
+            tcp_disconnect(sel, client)
+        return
+
+    data = data.strip().split(b'\n')
+    for cmd in data:
+        resp, shcmd = '', False
+        if not screen['alive']:
+            return
+        elif cmd == b'':
+            continue
+        elif cmd == b'\xde\xad':
+            screens_detach(sel, screen)
+            return
+        elif cmd == b'nscreen':
+            resp = 'Active screens: %d' % len(screens)
+        elif cmd == b'ncli':
+            resp = 'Active TCP clients: %d' % len(tcp_clients)
+        elif cmd == b'lcli':
+            resp = 'Active TCP clients:\n%s' % cliinfo(tcp_clients)
+        elif cmd == b'lq':
+            resp = '[%s]' % ', '.join(map(lambda s : repr(betterstr(s)), cmdq))
+        elif cmd == b'cq':
+            cmdq.clear()
+            for client in tcp_clients:
+                client['qidx'] = 0
+        elif cmd == b'show-serverkey':
+            resp = showcrypto()
+        elif cmd == b'\xc0\xdeprompt':
+            pass
+        elif cmd == b'pty':
+            resp = '[pk] Must specify a client to connect to via PTY.'
+        elif cmd[:4] == b'pty ':
+            try:
+                cn = int(cmd[4:])
+            except:
+                cn = -1
+            if cn < 0 or cn >= len(tcp_clients):
+                resp = '[pk] Cannot attach PTY to invalid TCP client.'
+            else:
+                client = tcp_clients[cn]
+                screens_pty(sel, screen, client)
+                return
+        else:
+            shcmd = True
+            targets = set()
+            if cmd[:7] == b'TARGET=':
+                if b' ' in cmd:
+                    sep = cmd.index(b' ')
+                    for tval in cmd[7:sep].split(b','):
+                        try:
+                            targets.add(int(tval))
+                        except:
+                            resp += '[pk] Invalid target: %s. Must be an integer.\n' % tval
+                    cmd = cmd[sep+1:]
+                    resp = resp.strip()
+                else:
+                    resp = '[pk] Can\'t target null command.'
+            blast_command(cmd, screen, targets=targets)
+        try:
+            if len(resp) > 0:
+                screen['sock'].sendall(bytes('%s\n' % resp, 'utf-8'))
+            if len(tcp_clients) < 1:
+                screen['sock'].sendall(SERVER_PROMPT)
+            elif not shcmd:
+                screen['sock'].sendall(CONNECTED_PROMPT)
+        except Exception as e:
+            print('[ERROR] Sending command result produced:', repr(e))
+            screens_detach(sel, screen)
+            return
+
+def screens_init(sel, sock, screen):
+    try:
+        sock.sendall(motd()+b'\n')
+        sock.sendall(prompt_str())
+    except Exception as e:
+        print('[ERROR] Sending MOTD to screen produced: %s' % repr(e))
+        screens_detach(sel, screen)
+
+def screens_close(sock, screen):
+    try:
+        sock.sendall(b'\xde\xad')
+    except:
+        pass
+
+def screens_accept(sel, sock):
+    global screens
+    try:
+        ss, _ = sock.accept()
+    except:
+        print('[WARNING] Error accepting screen attachment.')
+        return
+    
+    screen = {
+        'alive': True,
+        'pty': False,
+        'sock': ss
+    }
+    screens.append(screen)
+    sel.register(ss, selectors.EVENT_READ, {'callback': screens_read, 'close': screens_close, 'args': [screen]})
+    screens_init(sel, ss, screen)
+
+def register_screens(sel, socket_file):
+    global alive
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
         oldmask = os.umask(0o002)
         sock.bind(socket_file)
         os.umask(oldmask)
         sock.listen(5)
     except:
         print('[FATAL] Unable to bind socket file.')
-        cleanup()
+        alive = False
+        return
+    sel.register(sock, selectors.EVENT_READ, screens_accept)
 
-    global alive, pool, screens, screens_lock
-    while alive:
+def tcp_disconnect(sel, client):
+    global tcp_clients
+    sel.unregister(client['sock'])
+    client['sock'].close()
+    client['alive'] = False
+
+    if client in tcp_clients:
+        idx = tcp_clients.index(client)
+        del tcp_clients[idx]
+        brint('[INFO] TCP Client %d disconnected.' % idx)
+
+def tcp_dumpq(sel, client):
+    global cmdq
+    while client['alive'] and client['qidx'] < len(cmdq):
         try:
-            screen, _ = sock.accept()
+            dispatch_ccmd(client, cmdq[client['qidx']])
+            client['qidx'] += 1
         except:
-            brint('[WARNING] Error accepting screen attachment, moving on.')
-            continue
-        if not alive:
-            screen.close()
-            return
+            tcp_disconnect(sel, client)
 
-        screens_lock.acquire()
-        if not alive:
-            screens_lock.release()
-            return
-        screens.append(screen)
-        screens_lock.release()
+def tcp_unpty(sel, client, catchup=True, npty_screen=True):
+    if type(client['pty']) == dict:
+        client['pty']['pty'] = False
+        if npty_screen and client['pty']['alive']:
+            try:
+                client['pty']['sock'].sendall(b'\xc0\xdenpty')
+            except:
+                screens_detach(sel, client['pty'])
+        del client['isc']
+        del client['osc']
+    client['pty'] = False
+    if catchup:
+        tcp_dumpq(sel, client)
 
+def tcp_transport(sel, sock, client):
+    global tcp_clients, privkey, bits
+    if not client['alive']:
+        return
+    try:
+        data = client['isc'].recv() if client['pty'] else\
+                recv_encrypted(sock, privkey['d'], privkey['n'], bits=bits)
+    except:
+        data = False
+    if not data or data == b'\xde\xad':
+        if client['pty']:
+            tcp_unpty(sel, client, catchup=False)
+        tcp_disconnect(sel, client)
+        return
+    elif not client['pty']:
+        brint('[%d]' % tcp_clients.index(client), data, end='', prompt=False)
+    elif data == b'\xc0\xdenpty':
+        tcp_unpty(sel, client)
+        print('[INFO] npty acknowledged')
+    else:
         try:
-            pool.submit(screen_reader, screen)
-        except RuntimeError:
-            return
+            client['pty']['sock'].sendall(data)
+        except:
+            screens_detach(sel, client['pty'])
+            tcp_unpty(sel, client, npty_screen=False)
 
-def cleanup(*args):
-    global alive, sockets, tcp_port, socket_file
-    brint('[INFO] Received stop signal, shutting down daemon.')
+def tcp_handshake(sock):
+    global privkey, bits, exp
+    nbytes, headsz = bits//8, 2
+    rnbytes = int.from_bytes(sock.recv(headsz), 'big')
+    sock.sendall(nbytes.to_bytes(headsz, 'big'))
+
+    if rnbytes != nbytes:
+        brint('[ERROR] nbytes mismatch with client: %d vs %d' % (rnbytes, nbytes))
+        return False
+
+    rpubkey = { 'n': int.from_bytes(recv_encrypted(sock, privkey['d'], privkey['n'], bits=bits),\
+                'big'), 'e': exp }
+
+    return rpubkey
+
+def tcp_close(sock, client):
+    try:
+        dispatch_ccmd(client, b'tunnel')
+    except:
+        pass
+
+def tcp_accept(sel, sock):
+    global tcp_clients
+    try:
+        cs, ca = sock.accept()
+    except:
+        print('[WARNING] Error accepting TCP client.')
+        return
+
+    client = {
+        'alive': True,
+        'sock': cs,
+        'addr': ca,
+        'qidx': 0,
+        'pty': False
+    }
+    try:
+        rpk = tcp_handshake(cs)
+    except:
+        rpk = False
+    finally:
+        pass
+    if not rpk:
+        brint('[WARNING] TCP handshake failed from', client['addr'])
+        cs.close()
+        return
+    client['pubkey'] = rpk
+
+    tcp_clients.append(client)
+    sel.register(cs, selectors.EVENT_READ, {'callback': tcp_transport, 'close': tcp_close, 'args': [client]})
+    brint('[INFO] Connection from', ca[0], 'over TCP.', prompt=False)
+    tcp_dumpq(sel, client)
+
+def register_tcp(sel, port):
+    if port < 1:
+        brint('[INFO] TCP listener disabled.')
+        return
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', port))
+        sock.listen(5)
+    except:
+        brint('[WARNING] Error binding TCP socket, TCP listener will now die.')
+        sock.close()
+        return
+
+    sel.register(sock, selectors.EVENT_READ, tcp_accept)
+    print('[INFO] TCP listener started on port %d' % port)
+
+def stopsig(*args):
+    global alive, breaker
     alive = False
-    if 'tcp' in sockets:
-        sockets['tcp'].close()
-        try:
-            ws = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            ws.connect(('0.0.0.0', tcp_port))
-            ws.close()
-        except:
-            pass
-    if 'screen' in sockets:
-        sockets['screen'].close()
-        try:
-            ws = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            ws.connect(socket_file)
-            ws.close()
-        except:
-            pass
-
-    global tcp_clients, tcpc_lock, screens, screens_lock, bits
-    screens_lock.acquire()
-    for screen in screens:
-        try:
-            screen.sendall(b'\xde\xad')
-        except:
-            pass
-        screen.close()
-    screens_lock.release()
-
-    tcpc_lock.acquire()
-    for client in tcp_clients:
-        try:
-            dispatch_ccmd(client, b'tunnel')
-        except:
-            pass
-        client['sock'].close()
-    tcpc_lock.release()
-
-    global pool
-    pool.shutdown()
-
-    global pid_file
-    os.remove(pid_file)
-    os.remove(socket_file)
-    os.close(sys.stdout.fileno())
-    os.close(sys.stderr.fileno())
-
-    sys.exit(0)
+    print('[INFO] Received stop signal, shutting down.')
+    breaker.send(b'\xde\xad')
 
 def defaultint(s, default=0):
     try:
@@ -589,7 +432,7 @@ def main(args):
         print('[FATAL] Insufficient arguments.')
         sys.exit(1)
 
-    global socket_file, pid_file, tcp_port, bits
+    global bits
     socket_file = args[0]
     pid_file = args[1]
     log_file = args[2]
@@ -615,7 +458,7 @@ def main(args):
         os.close(logfd)
         sys.exit(1)
 
-    os.close(sys.stdin.fileno())
+    sys.stdin.close()
     os.dup2(logfd, sys.stdout.fileno())
     os.dup2(logfd, sys.stderr.fileno())
     os.close(logfd)
@@ -650,25 +493,49 @@ def main(args):
         except:
             pass
 
-    global alive, sockets, pool, screens, tcp_clients, cmdq
-    global screens_lock, tcpc_lock, cmdq_lock
 
-    sockets = {}
-
-    pool = ThreadPoolExecutor()
-    screens = []
-    screens_lock = threading.Lock()
-    tcp_clients = []
-    tcpc_lock = threading.Lock()
-    cmdq = []
-    cmdq_lock = threading.Lock()
+    global alive, screens, tcp_clients, cmdq, breaker
     alive = True
-
-    signal.signal(signal.SIGTERM, cleanup)
-
-    pool.submit(serve_tcp)
+    screens = []
+    tcp_clients = []
+    cmdq = []
+    sel = selectors.DefaultSelector()
+    breakee, breaker = socket.socketpair()
+    sel.register(breakee, selectors.EVENT_READ, None)
+    signal.signal(signal.SIGTERM, stopsig)
     print('[INFO] Daemon started successfully.')
-    serve_screens()
+
+    #register_dns(sel)
+    register_tcp(sel, tcp_port)
+    register_screens(sel, socket_file)
+
+    while alive:
+        events = sel.select()
+        for evt, _ in events:
+            if not alive:
+                break
+            if type(evt.data) == dict:
+                evt.data['callback'](sel, evt.fileobj, *evt.data['args'])
+            elif evt.data:
+                evt.data(sel, evt.fileobj)
+
+    print('[INFO] Unregistering event handlers.')
+    handlers = sel.get_map()
+    descriptors = list(handlers.keys())
+    for fd in descriptors:
+        fo = handlers[fd].fileobj
+        data = handlers[fd].data
+        if type(data) == dict and 'close' in data:
+            data['close'](fo, *data['args'])
+        sel.unregister(fo)
+        fo.close()
+
+    sel.close()
+    os.remove(pid_file)
+    os.remove(socket_file)
+    os.close(sys.stdout.fileno())
+    os.close(sys.stderr.fileno())
+    sys.exit(0)
 
 if __name__ == '__main__':
     main(sys.argv[1:])
