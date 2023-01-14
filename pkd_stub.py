@@ -73,7 +73,7 @@ def blast_command(cmd, orig_screen, targets=set()):
     tstr = betterstr(targets)
     if tstr == 'set()':
         tstr = 'all clients'
-    print('[INFO] Blasting command: %s to %s.' % (betterstr(cmd), betterstr(targets)))
+    print('[INFO] Blasting command: %s to %s.' % (betterstr(cmd), tstr))
     if type(cmd) != bytes:
         cmd = bytes(cmd, 'utf-8')
 
