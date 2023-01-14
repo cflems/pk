@@ -187,7 +187,6 @@ def work(h_addr, port, privkey, bits):
                 if not run_pty(sock, screen_is, screen_os):
                     return True
                 screen_os.send(b'\xc0\xdenpty')
-                send_encrypted(sock, PS1, rpubkey['e'], rpubkey['n'], bits=bits)
                 continue
             else:
                 try:

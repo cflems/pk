@@ -121,8 +121,6 @@ def attach_cmd():
                     tty.tcsetattr(sys.stdin.fileno(), tty.TCSAFLUSH, stdin_mode)
                     pty_mode = False
                     print('turned off pty mode due to npty command')
-                    if len(data) > 6:
-                        pnnl(str(data[6:], 'utf-8'))
                 elif not pty_mode and data == b'\xc0\xdepty':
                     pty_mode = True
                     stdin_mode = tty.tcgetattr(sys.stdin.fileno())
