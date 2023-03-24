@@ -355,7 +355,7 @@ def tcp_transport(sel, sock, client):
             client['pty']['sock'].sendall(data)
         except:
             screens_detach(sel, client['pty'])
-            tcp_send_npty(client)
+            tcp_send_npty(sel, client)
 
 def tcp_handshake(sock):
     global privkey, bits, exp
