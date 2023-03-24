@@ -139,14 +139,14 @@ def screens_pty(sel, screen, client):
             os.environ['TERM'] = 'xterm-256color'
         client['osc'].send(bytes(os.environ['TERM'], 'utf-8'))
     except:
-        tcp_unpty(sel, client)
+        tcp_unpty(sel, client, catchup=False)
         tcp_disconnect(sel, client)
     
     try:
         screen['sock'].sendall(b'\xc0\xdepty')
     except:
         screens_detach(sel, screen)
-        tcp_unpty(sel, client)
+        tcp_send_npty(sel, client)
         return
 
 def screens_read(sel, sock, screen):
@@ -160,7 +160,7 @@ def screens_read(sel, sock, screen):
     if not data or data == b'\xde\xad':
         screens_detach(sel, screen)
         if screen['pty']:
-            tcp_unpty(sel, screen['pty'], npty_screen=False)
+            tcp_send_npty(sel, screen['pty'])
         return
 
     if screen['pty']:
@@ -285,14 +285,15 @@ def register_screens(sel, socket_file):
 
 def tcp_disconnect(sel, client):
     global tcp_clients
+    if client not in tcp_clients:
+        return
+
     sel.unregister(client['sock'])
     client['sock'].close()
     client['alive'] = False
-
-    if client in tcp_clients:
-        idx = tcp_clients.index(client)
-        del tcp_clients[idx]
-        brint('[INFO] TCP Client %d disconnected.' % idx)
+    idx = tcp_clients.index(client)
+    del tcp_clients[idx]
+    brint('[INFO] TCP Client %d disconnected.' % idx)
 
 def tcp_dumpq(sel, client):
     global cmdq
@@ -303,17 +304,30 @@ def tcp_dumpq(sel, client):
         except:
             tcp_disconnect(sel, client)
 
-def tcp_unpty(sel, client, catchup=True, npty_screen=True):
+def tcp_send_npty(sel, client):
+    try:
+        client['osc'].send(b'\xc0\xdenpty')
+    except:
+        tcp_disconnect(sel, client)
+
+def tcp_unpty(sel, client, catchup=True):
     if type(client['pty']) == dict:
         client['pty']['pty'] = False
-        if npty_screen and client['pty']['alive']:
+        if client['pty']['alive']:
             try:
                 client['pty']['sock'].sendall(b'\xc0\xdenpty')
             except:
                 screens_detach(sel, client['pty'])
-        del client['isc']
-        del client['osc']
+        
+    try:
+        client['osc'].send(b'\xc0\xdeack')
+    except:
+        tcp_disconnect(sel, client)
+    # this will become stop_stream(backtrack)
+    del client['isc']
+    del client['osc']
     client['pty'] = False
+
     if catchup:
         tcp_dumpq(sel, client)
 
@@ -333,15 +347,15 @@ def tcp_transport(sel, sock, client):
         return
     elif not client['pty']:
         brint('[%d]' % tcp_clients.index(client), data, end='', prompt=False)
-    elif data == b'\xc0\xdenpty':
-        tcp_unpty(sel, client)
+    elif data[:6] == b'\xc0\xdenpty':
+        tcp_unpty(sel, client, catchup=True)
         print('[INFO] npty acknowledged')
     else:
         try:
             client['pty']['sock'].sendall(data)
         except:
             screens_detach(sel, client['pty'])
-            tcp_unpty(sel, client, npty_screen=False)
+            tcp_send_npty(client)
 
 def tcp_handshake(sock):
     global privkey, bits, exp

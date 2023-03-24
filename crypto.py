@@ -180,8 +180,8 @@ class PKSock:
         self.rpk = {'n': Crypto.b2i(self.recv()), 'e': Crypto.exp}
         return True
 
-    def handshake_server (self, server_rpk):
-        self.rpk = server_rpk
+    def handshake_server (self, server_pk):
+        self.rpk = server_pk
         self.raw_send(Crypto.i2b(self.nbytes))
         rnbytes = Crypto.b2i(self.raw_recv(self.headsz))
         if self.nbytes != rnbytes:
