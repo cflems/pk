@@ -1,6 +1,6 @@
 all:
-	(echo "#!"`which python3` && curl -s https://war.cflems.net/warcrypto.py && cat pkd_stub.py) >pkd.py
-	(echo "#!"`which python3` && curl -s https://war.cflems.net/warcrypto.py && cat pkcli_stub.py) >pkcli.py
+	(echo "#!"`which python3` && cat crypto.py && cat pkd_stub.py) >pkd.py
+	(echo "#!"`which python3` && cat crypto.py && cat pkcli_stub.py) >pkcli.py
 clean:
 	rm -f pkd.py pkcli.py *.pid *.sock *.log
 install:
