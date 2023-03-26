@@ -32,12 +32,8 @@ def showcrypto():
     global privkey
     return '[warcrypto] Server public key:\n{"n": %d, "e": %d}' % (privkey['n'], privkey['e'])
 
-def dispatch_command(sock, command, rpubkey):
-    global bits
-    send_encrypted(sock, command, rpubkey['e'], rpubkey['n'], bits=bits)
-
 def dispatch_ccmd(client, command):
-    dispatch_command(client['sock'], command, client['pubkey'])
+    client['sock'].send(command)
 
 def brint(*args, sep=' ', end='\n', prompt=True):
     s = '%s%s' % (sep.join(map(lambda s: betterstr(s), args)), end)
@@ -71,7 +67,7 @@ def broadcast_screens(s, skip=set(), sv_prompt=False, ctd_prompt=False):
 def blast_command(cmd, orig_screen, targets=set()):
     global cmdq
     tstr = betterstr(targets)
-    if tstr == 'set()':
+    if len(targets) < 1:
         tstr = 'all clients'
     print('[INFO] Blasting command: %s to %s.' % (betterstr(cmd), tstr))
     if type(cmd) != bytes:
@@ -128,19 +124,18 @@ def screens_detach(sel, screen):
         brint('[INFO] Screen detaching: %d' % idx)
 
 def screens_pty(sel, screen, client):
-    screen['pty'] = client
-    client['pty'] = screen
-    client['osc'] = OutStreamCipher(client['sock'], client['pubkey'], bits=bits)
-    client['isc'] = InStreamCipher(client['sock'], privkey, bits=bits)
-
     try:
         dispatch_ccmd(client, b'pty')
+        client['sock'].start_stream()
+        client['pty'] = screen
+        screen['pty'] = client
         if 'TERM' not in os.environ:
             os.environ['TERM'] = 'xterm-256color'
-        client['osc'].send(bytes(os.environ['TERM'], 'utf-8'))
+        client['sock'].send(bytes(os.environ['TERM'], 'utf-8'))
     except:
         tcp_unpty(sel, client, catchup=False)
         tcp_disconnect(sel, client)
+        return
     
     try:
         screen['sock'].sendall(b'\xc0\xdepty')
@@ -165,7 +160,7 @@ def screens_read(sel, sock, screen):
 
     if screen['pty']:
         try:
-            screen['pty']['osc'].send(data)
+            screen['pty']['sock'].send(data)
         except:
             tcp_unpty(sel, client, catchup=False)
             tcp_disconnect(sel, client)
@@ -306,11 +301,11 @@ def tcp_dumpq(sel, client):
 
 def tcp_send_npty(sel, client):
     try:
-        client['osc'].send(b'\xc0\xdenpty')
+        client['sock'].send(b'\xc0\xdenpty')
     except:
         tcp_disconnect(sel, client)
 
-def tcp_unpty(sel, client, catchup=True):
+def tcp_unpty(sel, client, catchup=True, backtrack=0):
     if type(client['pty']) == dict:
         client['pty']['pty'] = False
         if client['pty']['alive']:
@@ -320,12 +315,11 @@ def tcp_unpty(sel, client, catchup=True):
                 screens_detach(sel, client['pty'])
         
     try:
-        client['osc'].send(b'\xc0\xdeack')
+        client['sock'].send(b'\xc0\xdeack')
     except:
         tcp_disconnect(sel, client)
-    # this will become stop_stream(backtrack)
-    del client['isc']
-    del client['osc']
+    
+    client['sock'].stop_stream(backtrack)
     client['pty'] = False
 
     if catchup:
@@ -336,8 +330,7 @@ def tcp_transport(sel, sock, client):
     if not client['alive']:
         return
     try:
-        data = client['isc'].recv() if client['pty'] else\
-                recv_encrypted(sock, privkey['d'], privkey['n'], bits=bits)
+        data = client['sock'].recv()
     except:
         data = False
     if not data or data == b'\xde\xad':
@@ -348,7 +341,7 @@ def tcp_transport(sel, sock, client):
     elif not client['pty']:
         brint('[%d]' % tcp_clients.index(client), data, end='', prompt=False)
     elif data[:6] == b'\xc0\xdenpty':
-        tcp_unpty(sel, client, catchup=True)
+        tcp_unpty(sel, client, catchup=True, backtrack=len(data[6:]))
         print('[INFO] npty acknowledged')
     else:
         try:
@@ -357,21 +350,6 @@ def tcp_transport(sel, sock, client):
             screens_detach(sel, client['pty'])
             tcp_send_npty(sel, client)
 
-def tcp_handshake(sock):
-    global privkey, bits, exp
-    nbytes, headsz = bits//8, 2
-    rnbytes = int.from_bytes(sock.recv(headsz), 'big')
-    sock.sendall(nbytes.to_bytes(headsz, 'big'))
-
-    if rnbytes != nbytes:
-        brint('[ERROR] nbytes mismatch with client: %d vs %d' % (rnbytes, nbytes))
-        return False
-
-    rpubkey = { 'n': int.from_bytes(recv_encrypted(sock, privkey['d'], privkey['n'], bits=bits),\
-                'big'), 'e': exp }
-
-    return rpubkey
-
 def tcp_close(sock, client):
     try:
         dispatch_ccmd(client, b'tunnel')
@@ -379,7 +357,7 @@ def tcp_close(sock, client):
         pass
 
 def tcp_accept(sel, sock):
-    global tcp_clients
+    global tcp_clients, privkey, bits
     try:
         cs, ca = sock.accept()
     except:
@@ -388,22 +366,20 @@ def tcp_accept(sel, sock):
 
     client = {
         'alive': True,
-        'sock': cs,
+        'sock': PKSock(cs, privkey, bits),
         'addr': ca,
         'qidx': 0,
         'pty': False
     }
     try:
-        rpk = tcp_handshake(cs)
+        success = client['sock'].handshake_client()
     except:
-        rpk = False
-    finally:
-        pass
-    if not rpk:
+        success = False
+
+    if not success:
         brint('[WARNING] TCP handshake failed from', client['addr'])
         cs.close()
         return
-    client['pubkey'] = rpk
 
     tcp_clients.append(client)
     sel.register(cs, selectors.EVENT_READ, {'callback': tcp_transport, 'close': tcp_close, 'args': [client]})
