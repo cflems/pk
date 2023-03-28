@@ -283,7 +283,7 @@ def tcp_disconnect(sel, client):
     if client not in tcp_clients:
         return
 
-    sel.unregister(client['sock'])
+    sel.unregister(client['sock'].sock)
     client['sock'].close()
     client['alive'] = False
     idx = tcp_clients.index(client)
@@ -327,6 +327,7 @@ def tcp_unpty(sel, client, catchup=True, backtrack=0):
 
 def tcp_transport(sel, sock, client):
     global tcp_clients, privkey, bits
+
     if not client['alive']:
         return
     try:

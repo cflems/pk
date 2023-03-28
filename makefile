@@ -3,6 +3,9 @@ all:
 	(echo "#!"`which python3` && cat crypto.py && cat pkcli_stub.py) >pkcli.py
 clean:
 	rm -f pkd.py pkcli.py *.pid *.sock *.log
+test:
+	python3 pkcli.py localhost 30 4096
+	python3 pkd.py pk.sock pk.pid pk.log 4096 2236 default_key.json
 install:
 	useradd -rUs /usr/sbin/nologin pkd || true
 	mkdir -p /run/pk /etc/pk
