@@ -98,12 +98,13 @@ class PKSock:
         self.nbytes = -(-bits//8)
         self.headsz = Crypto.byte_length(self.nbytes)
         self.streaming = False
-        # TODO: need to separate isk and osk
         self.isk = None
         self.iskp = 0
         self.osk = None
         self.oskp = 0
-        self.sksz = self.nbytes - self.headsz - 1
+        # TODO: shrink sksz by random pad size so it's only 1 chunk lol
+        self.sksz = self.nbytes - self.headsz - Crypto.rand_pad - 1
+        self.read_buffer = False
         self.buffer = b''
 
     def start_stream (self):
@@ -112,6 +113,8 @@ class PKSock:
         self.iskp = 0
         self.oskp = 0
         self.streaming = True
+        self.read_buffer = False
+        self.buffer = b''
 
     def stop_stream (self, backtrack=0):
         assert (backtrack <= self.nbytes)
@@ -120,6 +123,7 @@ class PKSock:
         self.iskp = 0
         self.oskp = 0
         self.buffer = self.buffer[-backtrack:]
+        self.read_buffer = True
         self.streaming = False
 
     def raw_send (self, b):
@@ -127,15 +131,16 @@ class PKSock:
 
     def raw_recv (self, n):
         msg = b''
-        if (len(self.buffer) > 0):
+        if self.read_buffer and len(self.buffer) > 0:
             msg += self.buffer[:n]
             self.buffer = self.buffer[n:]
-        if (len(msg) < n):
+        if len(msg) < n:
             msg += self.sock.recv(n-len(msg))
         return msg
     
     def raw_cache (self, b):
         assert(type(b) == bytes)
+        self.read_buffer = False
         if len(b) < self.nbytes:
             off = self.nbytes - len(b)
             self.buffer = self.buffer[len(b) - self.nbytes:] + b
@@ -150,18 +155,18 @@ class PKSock:
         if self.streaming and not force_normal:
             if not self.osk or self.oskp >= len(self.osk):
                 self.push_sk()
-            while len(b) >= len(self.osk) - self.oskp:
+            while len(b) > len(self.osk) - self.oskp:
                 b_frag = b[:len(self.osk)-self.oskp]
-                k = self.osk[self.oskp:self.oskp+len(b_frag)]
-                self.oskp += len(b_frag)
-                self.sock.sendall(bytes([b_frag[i] ^ k[i] for i in range(len(b_frag))]))
+                k = self.osk[self.oskp:]
+                c = bytes([b_frag[i] ^ k[i] for i in range(len(b_frag))])
+                self.sock.sendall(c)
                 b = b[len(b_frag):]
                 self.push_sk()
             if len(b) > 0:
                 k = self.osk[self.oskp:self.oskp+len(b)]
-                self.sock.sendall(bytes([b[i] ^ k[i] for i in range(len(b))]))
+                c = bytes([b[i] ^ k[i] for i in range(len(b))])
+                self.sock.sendall(c)
                 self.oskp += len(b)
-                assert(self.oskp < len(self.osk))
         else:
             p = Crypto.encrypt(b, self.rpk['e'], self.rpk['n'], self.bits)
             self.raw_send(Crypto.i2b(len(p), self.headsz))
@@ -173,7 +178,8 @@ class PKSock:
             if not self.isk or self.iskp >= len(self.isk):
                 self.pull_sk()
             # TODO: this could use some work because we can split opcodes etc
-            c = self.sock.recv(len(self.isk) - self.iskp)
+            # TODO: this also bricks if we pull the key successfully
+            c = self.raw_recv(len(self.isk) - self.iskp)
             self.raw_cache(c)
             k = self.isk[self.iskp : self.iskp+len(c)]
             self.iskp += len(c)
@@ -205,17 +211,13 @@ class PKSock:
         return True
 
     def push_sk (self):
-        print('PUSH_SK')
         self.osk = secrets.token_bytes(self.sksz)
         self.oskp = 0
         self.send(self.osk, force_normal=True)
-        print('RETURNED')
 
     def pull_sk (self):
-        print('PULL_SK')
         self.isk = self.recv(force_normal=True)
         self.iskp = 0
-        print('RETURNED')
 
     def close (self):
         self.sock.close()

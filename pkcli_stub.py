@@ -98,7 +98,7 @@ def pty_barrier(sock):
     while bytes(code) != b'\xc0\xdeack':
         buffer = sock.recv()
         while len(buffer) > 0:
-            code = code[:-1]+buffer[0]
+            code = code[:-1]+buffer[0:1]
             buffer = buffer[1:]
             if bytes(code) == b'\xc0\xdeack':
                 break
