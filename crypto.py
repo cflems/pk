@@ -123,7 +123,7 @@ class PKSock:
         self.iskp = 0
         self.oskp = 0
         self.buffer = self.buffer[-backtrack:]
-        self.read_buffer = True
+        self.read_buffer = backtrack > 0
         self.streaming = False
 
     def raw_send (self, b):
@@ -194,7 +194,6 @@ class PKSock:
         rnbytes = Crypto.b2i(self.raw_recv(self.headsz))
         self.raw_send(Crypto.i2b(self.nbytes, self.headsz))
         if self.nbytes != rnbytes:
-            print('nbytes mismatch: %d vs %d' % (self.nbytes, rnbytes))
             return False
         
         self.rpk = {'n': Crypto.b2i(self.recv()), 'e': Crypto.exp}
@@ -205,7 +204,6 @@ class PKSock:
         self.raw_send(Crypto.i2b(self.nbytes, self.headsz))
         rnbytes = Crypto.b2i(self.raw_recv(self.headsz))
         if self.nbytes != rnbytes:
-            print('nbytes mismatch: %d vs %d' % (self.nbytes, rnbytes))
             return False
         self.send(Crypto.i2b(self.priv['n'], self.nbytes))
         return True

@@ -305,7 +305,7 @@ def tcp_send_npty(sel, client):
     except:
         tcp_disconnect(sel, client)
 
-def tcp_unpty(sel, client, catchup=True, backtrack=0):
+def tcp_unpty(sel, client, catchup=True, putback=0):
     if type(client['pty']) == dict:
         client['pty']['pty'] = False
         if client['pty']['alive']:
@@ -319,21 +319,15 @@ def tcp_unpty(sel, client, catchup=True, backtrack=0):
     except:
         tcp_disconnect(sel, client)
     
-    client['sock'].stop_stream(backtrack)
+    client['sock'].stop_stream(backtrack=putback)
     client['pty'] = False
 
     if catchup:
         tcp_dumpq(sel, client)
 
-def tcp_transport(sel, sock, client):
-    global tcp_clients, privkey, bits
+def tcp_process_data(sel, sock, client, data):
+    global tcp_clients
 
-    if not client['alive']:
-        return
-    try:
-        data = client['sock'].recv()
-    except:
-        data = False
     if not data or data == b'\xde\xad':
         if client['pty']:
             tcp_unpty(sel, client, catchup=False)
@@ -341,15 +335,32 @@ def tcp_transport(sel, sock, client):
         return
     elif not client['pty']:
         brint('[%d]' % tcp_clients.index(client), data, end='', prompt=False)
-    elif data[:6] == b'\xc0\xdenpty':
-        tcp_unpty(sel, client, catchup=True, backtrack=len(data[6:]))
+    elif b'\xc0\xdenpty' in data:
+        idx = data.index(b'\xc0\xdenpty')
+        if idx > 0:
+            tcp_process_data(sel, sock, client, data[:idx])
+
+        print('[INFO] received npty from client')
+        tcp_unpty(sel, client, catchup=True, putback=len(data)-idx-6)
         print('[INFO] npty acknowledged')
+
+        if idx+6 < len(data):
+            tcp_transport(sel, sock, client)
     else:
         try:
             client['pty']['sock'].sendall(data)
         except:
             screens_detach(sel, client['pty'])
             tcp_send_npty(sel, client)
+
+def tcp_transport(sel, sock, client):
+    if not client['alive']:
+        return
+    try:
+        data = client['sock'].recv()
+    except:
+        data = False
+    tcp_process_data(sel, sock, client, data)
 
 def tcp_close(sock, client):
     try:

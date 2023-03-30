@@ -124,21 +124,19 @@ def attach_cmd():
                         print('turned off pty mode due to remote detach')
                     attached = False
                     break
-                elif pty_mode and data[:6] == b'\xc0\xdenpty':
+                elif pty_mode and b'\xc0\xdenpty' in data:
+                    idx = data.index(b'\xc0\xdenpty')
+                    pnnl(str(data[:idx], 'utf-8'))
                     tty.tcsetattr(sys.stdin.fileno(), tty.TCSAFLUSH, stdin_mode)
                     pty_mode = False
                     print('turned off pty mode due to npty command')
+                    pnnl(str(data[idx+6:], 'utf-8'))
                 elif not pty_mode and data == b'\xc0\xdepty':
                     pty_mode = True
                     stdin_mode = tty.tcgetattr(sys.stdin.fileno())
                     tty.setraw(sys.stdin.fileno())
                 else:
-                    if data[:6] == b'\xc0\xdenpty':
-                        pnnl(str(data[6:], 'utf-8'))
-                    elif data[:2] == b'\xc0\xde':
-                        print('Received bogus code from server', data)
-                    else:
-                        pnnl(str(data, 'utf-8'))
+                    pnnl(str(data, 'utf-8'))
     sel.close()
     sock.close()
     if pty_mode:
