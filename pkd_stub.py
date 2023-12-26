@@ -1,5 +1,7 @@
 import os, sys, socket, signal, json, selectors
 
+# basic magic number
+DNS_UDP_PORT = 53
 # initial crypto config
 SERVER_PROMPT = b'pk> '
 CONNECTED_PROMPT = b'$ '
@@ -345,7 +347,7 @@ def tcp_process_data(sel, sock, client, data):
         print('[INFO] npty acknowledged')
 
         if idx+6 < len(data):
-            tcp_transport(sel, sock, client)
+            transport_tcp(sel, sock, client)
     else:
         try:
             client['pty']['sock'].sendall(data)
@@ -353,7 +355,7 @@ def tcp_process_data(sel, sock, client, data):
             screens_detach(sel, client['pty'])
             tcp_send_npty(sel, client)
 
-def tcp_transport(sel, sock, client):
+def transport_tcp(sel, sock, client):
     if not client['alive']:
         return
     try:
@@ -394,7 +396,7 @@ def tcp_accept(sel, sock):
         return
 
     tcp_clients.append(client)
-    sel.register(cs, selectors.EVENT_READ, {'callback': tcp_transport, 'close': tcp_close, 'args': [client]})
+    sel.register(cs, selectors.EVENT_READ, {'callback': transport_tcp, 'close': tcp_close, 'args': [client]})
     brint('[INFO] Connection from', ca[0], 'over TCP.', prompt=False)
     tcp_dumpq(sel, client)
 
@@ -414,7 +416,63 @@ def register_tcp(sel, port):
         return
 
     sel.register(sock, selectors.EVENT_READ, tcp_accept)
-    print('[INFO] TCP listener started on port %d' % port)
+    print('[INFO] TCP listener started on port %d/tcp' % port)
+
+def transport_dns(sel, sock):
+    try:
+        req, addr = sock.recvfrom(1024)
+    except:
+        print('[WARNING] Error receiving DNS query.')
+        return
+    dns_refuse(sock, addr, req)
+
+def dns_refuse(sock, addr, req):
+    # ID = req.id
+    resp = bytearray(req[0:2])
+    # QR = 1 | opcode[4] = req.opcode | AA = 0 | TC = 0 | RD = req.rd
+    resp.append((req[2] & 0b11111001) | 0b10000000)
+    # RA = 0 | Z[3] = 0 | rcode[4] = 5 (REFUSED)
+    resp.append(5)
+    # QDCount = req.QDCount
+    try:
+        qdcount = int.from_bytes(req[4:6], 'big')
+        resp.extend(req[4:6])
+    except:
+        qdcount = 0
+        resp.extend(b'\x00' * 2)
+    # ANCount = NSCount = ARCount = 0
+    resp.extend(b'\x00' * 6)
+    # Copy question section
+    dns_copy_queries(qdcount, req[12:], resp)
+
+    sock.sendto(resp, addr)
+
+def dns_copy_queries(qdcount, qdsect, buffer):
+    print('qdsect=', qdsect)
+    for _ in range(qdcount):
+        while True:
+            labelsize = qdsect[0] + 1
+            buffer.extend(qdsect[:labelsize])
+            qdsect = qdsect[labelsize:]
+            if labelsize < 2:
+                break
+        # QType | QClass
+        buffer.extend(qdsect[:4])
+        qdsect = qdsect[4:]
+
+def register_dns(sel):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', DNS_UDP_PORT))
+    except:
+        brint('[WARNING] Error binding DNS socket, DNS listener will now die.')
+        sock.close()
+        return
+
+    sel.register(sock, selectors.EVENT_READ, transport_dns)
+    print('[INFO] DNS listener started on port %d/udp' % DNS_UDP_PORT)
+    pass
 
 def stopsig(*args):
     global alive, breaker
@@ -507,7 +565,7 @@ def main(args):
     signal.signal(signal.SIGTERM, stopsig)
     print('[INFO] Daemon started successfully.')
 
-    #register_dns(sel)
+    register_dns(sel)
     register_tcp(sel, tcp_port)
     register_screens(sel, socket_file)
 
@@ -535,6 +593,7 @@ def main(args):
     sel.close()
     os.remove(pid_file)
     os.remove(socket_file)
+    print('[INFO] Daemon stopped.')
     os.close(sys.stdout.fileno())
     os.close(sys.stderr.fileno())
     sys.exit(0)

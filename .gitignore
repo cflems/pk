@@ -2,9 +2,9 @@
 *ptys.py
 pkd.py
 pkcli.py
+devctl.py
 pkdnull.py
 pkdkey.json
-warcrypto.py
 *.pid
 *.sock
 *.log
