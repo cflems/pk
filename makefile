@@ -1,6 +1,6 @@
 all:
-	php -f index.php >live/index.html
-	php -f client.php >live/client.html
-	php -f server.php >live/server.html
-	php -f hdb.php >live/hdb.html
-	php -f commands.php >live/commands.html
+	php -f index.php >docs/index.html
+	php -f client.php >docs/client.html
+	php -f server.php >docs/server.html
+	php -f hdb.php >docs/hdb.html
+	php -f commands.php >docs/commands.html
